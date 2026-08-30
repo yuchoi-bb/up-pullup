@@ -164,10 +164,13 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (settings.autoSync && viewModel.googleConfigured) {
-                        "기록하면 Google 할 일 '${settings.taskListTitle ?: "목록 미선택"}'에 완료로 올라갑니다."
-                    } else {
-                        "Google 자동 업로드가 꺼져 있습니다. 설정에서 켤 수 있어요."
+                    when {
+                        !viewModel.googleConfigured ->
+                            "기록은 이 기기에 저장됩니다. 설정 → 데이터에서 백업 파일로 빼 둘 수 있어요."
+                        !settings.autoSync ->
+                            "Google 자동 업로드가 꺼져 있습니다. 설정에서 켤 수 있어요."
+                        else ->
+                            "기록하면 Google 할 일 '${settings.taskListTitle ?: "목록 미선택"}'에 완료로 올라갑니다."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

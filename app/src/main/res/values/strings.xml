@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">업풀업</string>
+    <string name="reminder_channel_name">운동 알림</string>
+    <string name="reminder_channel_desc">오늘의 목표 세트를 알려줍니다.</string>
+</resources>

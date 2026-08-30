@@ -1,0 +1,135 @@
+name: Android CI
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "릴리스도 함께 만들기"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 버전 계산
+        id: version
+        run: |
+          BASE=$(grep -oP 'val baseVersionName = "\K[^"]+' app/build.gradle.kts)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="${BASE}.${GITHUB_RUN_NUMBER}"
+            TAG="v${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "버전 ${VERSION} (code ${GITHUB_RUN_NUMBER}, tag ${TAG})"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 릴리스 keystore 준비
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+            {
+              echo "storeFile=release.jks"
+              echo "storePassword=${KEYSTORE_PASSWORD}"
+              echo "keyAlias=${KEY_ALIAS}"
+              echo "keyPassword=${KEY_PASSWORD}"
+            } > keystore.properties
+            echo "signed=release" >> "$GITHUB_OUTPUT"
+            echo "릴리스 keystore로 서명합니다."
+          else
+            echo "signed=debug" >> "$GITHUB_OUTPUT"
+            echo "::warning::KEYSTORE_BASE64 시크릿이 없어 debug 키로 서명합니다. 빌드마다 서명이 바뀌어 앱 내 업데이트 설치가 실패할 수 있습니다."
+          fi
+
+      - name: 단위 테스트
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: APK 빌드
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+        run: |
+          ./gradlew assembleRelease --no-daemon \
+            -PappVersionName=${{ steps.version.outputs.version }} \
+            -PappVersionCode=${{ steps.version.outputs.code }} \
+            -PGOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID}" \
+            -PGITHUB_OWNER=${{ github.repository_owner }} \
+            -PGITHUB_REPO=${{ github.event.repository.name }}
+
+      - name: APK 이름 정리
+        id: apk
+        run: |
+          SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          DEST="up-pullup-${{ steps.version.outputs.version }}.apk"
+          cp "$SRC" "$DEST"
+          echo "path=${DEST}" >> "$GITHUB_OUTPUT"
+          ls -lh "$DEST"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: up-pullup-${{ steps.version.outputs.version }}
+          path: ${{ steps.apk.outputs.path }}
+          retention-days: 30
+
+      - name: 릴리스 발행
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES_FILE=$(mktemp)
+          {
+            echo "## 업풀업 ${{ steps.version.outputs.version }}"
+            echo ""
+            echo "- 커밋: ${GITHUB_SHA:0:7}"
+            echo "- 서명: ${{ steps.keystore.outputs.signed }}"
+            echo ""
+            echo "앱 내 **설정 → 앱 업데이트**에서 바로 내려받을 수 있습니다."
+            if [ "${{ steps.keystore.outputs.signed }}" = "debug" ]; then
+              echo ""
+              echo "> ⚠️ 릴리스 keystore가 설정되지 않아 debug 키로 서명되었습니다."
+              echo "> 이전 버전 위에 덮어쓰기 설치가 안 되면 기존 앱을 지우고 설치해 주세요."
+            fi
+            echo ""
+            echo "### 변경 사항"
+            git log -5 --pretty='- %s' || true
+          } > "$NOTES_FILE"
+
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.apk.outputs.path }}" --clobber
+          else
+            gh release create "${{ steps.version.outputs.tag }}" "${{ steps.apk.outputs.path }}" \
+              --title "업풀업 ${{ steps.version.outputs.version }}" \
+              --notes-file "$NOTES_FILE" \
+              --latest
+          fi

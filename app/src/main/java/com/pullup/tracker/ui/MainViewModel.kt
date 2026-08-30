@@ -1,7 +1,9 @@
 package com.pullup.tracker.ui
 
 import android.app.Application
+import android.content.ContentResolver
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pullup.tracker.PullupApplication
@@ -17,12 +19,14 @@ import com.pullup.tracker.data.TaskListRef
 import com.pullup.tracker.data.TrainingPlan
 import com.pullup.tracker.reminder.ReminderScheduler
 import com.pullup.tracker.update.ReleaseInfo
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalDate
 import java.util.UUID
@@ -298,6 +302,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun exportCsv(): File = container.repository.exportCsv()
+
+    // ------------------------------------------------------------ 백업 / 복원
+
+    fun backupFileName(): String = container.repository.backupFileName()
+
+    fun writeBackup(resolver: ContentResolver, uri: Uri) {
+        viewModelScope.launch {
+            _busy.value = true
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val text = container.repository.exportBackupText()
+                    resolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) }
+                        ?: throw IllegalStateException("파일을 열 수 없습니다.")
+                    text.length
+                }
+            }.onSuccess {
+                _message.value = UiMessage("백업을 저장했습니다. 앱을 다시 설치한 뒤 이 파일로 복원하세요.")
+            }.onFailure {
+                _message.value = UiMessage(it.message ?: "백업 저장에 실패했습니다.", isError = true)
+            }
+            _busy.value = false
+        }
+    }
+
+    fun readBackup(resolver: ContentResolver, uri: Uri) {
+        viewModelScope.launch {
+            _busy.value = true
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val text = resolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                        ?: throw IllegalStateException("파일을 열 수 없습니다.")
+                    container.repository.importBackupText(text)
+                }
+            }.onSuccess { count ->
+                loadedSessionKey = null
+                _message.value = UiMessage("기록 ${count}개를 복원했습니다.")
+            }.onFailure {
+                _message.value = UiMessage(it.message ?: "백업 파일을 읽지 못했습니다.", isError = true)
+            }
+            _busy.value = false
+        }
+    }
 
     fun setActivePlan(planId: String) {
         container.repository.setActivePlan(planId)

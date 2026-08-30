@@ -59,6 +59,9 @@ android {
         buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"$googleOauthClientId\"")
         buildConfigField("String", "OAUTH_REDIRECT_SCHEME", "\"$appAuthRedirectScheme\"")
         buildConfigField("String", "GITHUB_OWNER", "\"$githubOwner\"")
+        // 고정 서명 키로 빌드되었는지. false면 덮어쓰기 설치가 불가능하므로
+        // 앱이 업데이트 안내 문구와 백업 유도를 다르게 보여준다.
+        buildConfigField("boolean", "STABLE_SIGNING", hasReleaseKeystore.toString())
         buildConfigField("String", "GITHUB_REPO", "\"$githubRepo\"")
 
         vectorDrawables { useSupportLibrary = true }

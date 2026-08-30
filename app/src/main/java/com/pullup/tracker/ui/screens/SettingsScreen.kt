@@ -21,6 +21,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,6 +79,16 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     ) { granted ->
         viewModel.updateSettings { it.copy(reminderEnabled = granted) }
     }
+
+    val backupLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> if (uri != null) viewModel.writeBackup(context.contentResolver, uri) }
+
+    val restoreLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) viewModel.readBackup(context.contentResolver, uri) }
+
+    var confirmRestore by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -293,6 +306,34 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     }
                 }
 
+                if (!BuildConfig.STABLE_SIGNING) {
+                    Spacer(Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(13.dp)) {
+                            Text(
+                                "이 앱은 고정 서명 키 없이 빌드되어 새 버전을 덮어쓸 수 없습니다.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "① 아래에서 백업 저장 → ② 기존 앱 삭제 → ③ 새 APK 설치 → ④ 백업에서 복원",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.height(9.dp))
+                            OutlinedButton(
+                                onClick = { backupLauncher.launch(viewModel.backupFileName()) },
+                                enabled = !busy
+                            ) { Text("지금 백업 저장") }
+                        }
+                    }
+                }
+
                 val release = update.release
                 if (release != null && release.isNewer) {
                     Spacer(Modifier.height(12.dp))
@@ -369,6 +410,24 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
         // ------------------------------------------------------- 데이터
         item {
             SectionCard(title = "데이터") {
+                Text(
+                    "백업 파일에는 플랜·기록·진행도가 모두 들어갑니다. 앱을 지웠다 다시 깔아도 그대로 돌아옵니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { backupLauncher.launch(viewModel.backupFileName()) },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("백업 파일로 저장") }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { confirmRestore = true },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("백업 파일에서 복원") }
+                Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = {
                         val file = viewModel.exportCsv()
@@ -387,6 +446,23 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                 ) { Text("기록 CSV로 내보내기") }
             }
         }
+    }
+
+    if (confirmRestore) {
+        AlertDialog(
+            onDismissRequest = { confirmRestore = false },
+            title = { Text("백업에서 복원") },
+            text = { Text("지금 앱에 있는 플랜과 기록이 모두 백업 파일 내용으로 바뀝니다. 계속할까요?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRestore = false
+                    restoreLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                }) { Text("파일 고르기") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRestore = false }) { Text("취소") }
+            }
+        )
     }
 }
 

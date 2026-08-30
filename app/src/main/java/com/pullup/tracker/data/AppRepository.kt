@@ -212,6 +212,27 @@ class AppRepository(private val context: Context) {
         )
     }
 
+    // ---------------------------------------------------------------- 백업 / 복원
+
+    /** 플랜·기록·진행도까지 전부 담긴 백업 문자열. 앱을 지웠다 깔아도 이걸로 그대로 돌아온다. */
+    fun exportBackupText(): String = json.encodeToString(_data.value)
+
+    /** 백업 문자열로 전체 데이터를 덮어쓴다. 복원한 기록 수를 돌려준다. */
+    fun importBackupText(text: String): Int {
+        val incoming = json.decodeFromString<AppData>(text)
+        require(incoming.plans.isNotEmpty() || incoming.logs.isNotEmpty()) {
+            "백업 파일에 플랜도 기록도 없습니다."
+        }
+        val restored = incoming.copy(
+            seeded = true,
+            activePlanId = incoming.activePlanId ?: incoming.plans.firstOrNull()?.id
+        )
+        mutate { restored }
+        return restored.logs.size
+    }
+
+    fun backupFileName(): String = "up-pullup-backup-${LocalDate.now()}.json"
+
     // ---------------------------------------------------------------- 내보내기
 
     fun exportCsv(): File {

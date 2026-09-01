@@ -47,7 +47,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -56,6 +58,7 @@ import androidx.core.content.FileProvider
 import com.pullup.tracker.BuildConfig
 import com.pullup.tracker.ai.GeminiClient
 import com.pullup.tracker.data.DateUtils
+import com.pullup.tracker.google.AppSigningInfo
 import com.pullup.tracker.ui.MainViewModel
 import com.pullup.tracker.ui.components.Pill
 import com.pullup.tracker.ui.components.SectionCard
@@ -159,6 +162,10 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                         singleLine = true
                     )
                 }
+
+                // 연동 전/후 모두 필요하므로 분기 바깥에 둔다.
+                Spacer(Modifier.height(16.dp))
+                SigningInfoBlock()
             }
         }
 
@@ -463,6 +470,66 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                 TextButton(onClick = { confirmRestore = false }) { Text("취소") }
             }
         )
+    }
+}
+
+/**
+ * Google Cloud Console에서 Android OAuth 클라이언트를 만들 때 넣어야 할 두 값을
+ * 설치된 APK에서 직접 읽어 보여 준다. 어느 지문을 등록할지 헷갈릴 일이 없다.
+ */
+@Composable
+private fun SigningInfoBlock() {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val packageName = context.packageName
+    val sha1 = remember { AppSigningInfo.sha1(context) }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(13.dp)) {
+            Text("이 빌드의 등록 정보", style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.height(3.dp))
+            Text(
+                "Cloud Console에서 Android OAuth 클라이언트를 만들 때 아래 두 값을 그대로 넣으세요.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            CopyableValue("패키지 이름", packageName) {
+                clipboard.setText(AnnotatedString(packageName))
+            }
+            Spacer(Modifier.height(8.dp))
+            CopyableValue("SHA-1 인증서 지문", sha1 ?: "읽을 수 없음") {
+                if (sha1 != null) clipboard.setText(AnnotatedString(sha1))
+            }
+            if (!BuildConfig.STABLE_SIGNING) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "이 빌드는 임시 키로 서명되어 SHA-1이 빌드마다 바뀝니다. " +
+                        "고정 키로 서명한 APK를 설치한 뒤 그 지문을 등록해야 로그인이 유지됩니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CopyableValue(label: String, value: String, onCopy: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(value, style = MaterialTheme.typography.bodyMedium)
+        }
+        TextButton(onClick = onCopy) { Text("복사") }
     }
 }
 

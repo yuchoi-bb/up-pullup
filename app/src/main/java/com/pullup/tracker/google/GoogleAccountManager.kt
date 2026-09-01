@@ -95,7 +95,14 @@ class GoogleAccountManager(private val context: Context) {
             if (token != null) {
                 cont.resume(token)
             } else {
-                cont.resumeWithException(ex ?: IllegalStateException("액세스 토큰을 가져오지 못했습니다."))
+                // 갱신 토큰 만료가 가장 흔한 원인이라 다시 연결하라고 분명히 말해 준다.
+                val detail = ex?.errorDescription ?: ex?.error
+                cont.resumeWithException(
+                    IllegalStateException(
+                        "Google 인증이 만료되었습니다. 설정에서 계정을 다시 연결해 주세요." +
+                            if (detail != null) " ($detail)" else ""
+                    )
+                )
             }
         }
     }

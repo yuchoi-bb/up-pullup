@@ -2,15 +2,17 @@
 
 package com.pullup.tracker.ui.components
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
@@ -119,17 +120,25 @@ fun Pill(
     }
 }
 
-/** 최근 세션 총 개수를 보여주는 간단한 막대 차트. */
+/** 막대 하나 = 한 세션. */
+data class BarEntry(val value: Int, val label: String)
+
+/**
+ * 최근 세션의 총 개수 추이.
+ *
+ * 세로 축은 "최종 목표(100개)"가 아니라 실제 기록 범위에 맞춘다. 목표에 맞추면
+ * 초반 24~32개가 전부 바닥에 깔려 서로 구분이 안 된다. 목표선은 화면을 뭉개지
+ * 않을 만큼 가까워졌을 때만 그린다.
+ */
 @Composable
 fun RepsBarChart(
-    values: List<Int>,
-    labels: List<String>,
+    entries: List<BarEntry>,
     modifier: Modifier = Modifier,
     barColor: Color = MaterialTheme.colorScheme.primary,
     goal: Int? = null,
     goalColor: Color = MaterialTheme.colorScheme.secondary
 ) {
-    if (values.isEmpty()) {
+    if (entries.isEmpty()) {
         Text(
             "아직 기록이 없습니다.",
             style = MaterialTheme.typography.bodyMedium,
@@ -137,45 +146,64 @@ fun RepsBarChart(
         )
         return
     }
-    val max = (listOfNotNull(values.maxOrNull(), goal).maxOrNull() ?: 1).coerceAtLeast(1)
+    val height = 132.dp
+    val dataMax = entries.maxOf { it.value }.coerceAtLeast(1)
+    val goalInRange = goal != null && goal > 0 && goal <= dataMax * 1.6
+    val scaleMax = if (goalInRange) {
+        maxOf(dataMax * 1.1f, goal!! * 1.05f)
+    } else {
+        dataMax * 1.15f
+    }
+    // 막대가 많으면 라벨이 겹치므로 간격을 띄워 표시한다.
+    val labelStep = ((entries.size + 3) / 4).coerceAtLeast(1)
+
     Column(modifier) {
-        Canvas(
-            modifier = Modifier
+        Box(
+            Modifier
                 .fillMaxWidth()
-                .height(140.dp)
+                .height(height)
         ) {
-            val count = values.size
-            val gap = size.width / (count * 6f)
-            val barWidth = (size.width - gap * (count + 1)) / count
-            values.forEachIndexed { index, value ->
-                val ratio = value.toFloat() / max
-                val barHeight = size.height * ratio
-                val left = gap + index * (barWidth + gap)
-                drawRoundRect(
-                    color = barColor,
-                    topLeft = androidx.compose.ui.geometry.Offset(left, size.height - barHeight),
-                    size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
-                    cornerRadius = CornerRadius(barWidth / 3f, barWidth / 3f)
-                )
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.Bottom) {
+                entries.forEach { entry ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .padding(horizontal = 2.dp),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight((entry.value / scaleMax).coerceIn(0.03f, 1f))
+                                .clip(RoundedCornerShape(topStart = 5.dp, topEnd = 5.dp))
+                                .background(barColor)
+                        )
+                    }
+                }
             }
-            if (goal != null && goal > 0) {
-                val y = size.height - size.height * (goal.toFloat() / max)
-                drawLine(
-                    color = goalColor,
-                    start = androidx.compose.ui.geometry.Offset(0f, y),
-                    end = androidx.compose.ui.geometry.Offset(size.width, y),
-                    strokeWidth = 2f
+            if (goalInRange) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .offset(y = -(height * (goal!! / scaleMax)))
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .background(goalColor)
                 )
             }
         }
         Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            labels.forEach {
+        Row(Modifier.fillMaxWidth()) {
+            entries.forEachIndexed { index, entry ->
+                val show = index % labelStep == 0 || index == entries.lastIndex
                 Text(
-                    it,
+                    if (show) entry.label else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f)
                 )
             }
         }

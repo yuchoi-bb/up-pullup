@@ -401,6 +401,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .replace("{date}", log.date)
         .replace("{session}", log.sessionIndex.toString())
 
+    /** 기록 날짜를 옮긴다(몰아서 입력한 걸 실제 날짜로 되돌릴 때). */
+    fun changeLogDate(logId: String, newDate: LocalDate) {
+        val log = data.value.logs.firstOrNull { it.id == logId } ?: return
+        container.repository.updateLog(log.copy(date = newDate.toString()))
+        _message.value = UiMessage("${DateUtils.label(newDate)}로 옮겼습니다.")
+    }
+
+    /**
+     * 같은 날짜에 몰려 있는 기록을 하루 간격으로 뒤로 펼친다.
+     * 한 번에 몰아 입력했지만 실제로는 며칠에 걸쳐 한 경우를 정리하는 용도.
+     * 각 묶음에서 가장 최근 세션은 날짜를 그대로 두고, 앞선 세션들을 하루씩 당긴다.
+     */
+    fun spreadSameDayLogs() {
+        val groups = data.value.logs.groupBy { it.date }.filterValues { it.size > 1 }
+        if (groups.isEmpty()) {
+            _message.value = UiMessage("같은 날짜에 몰린 기록이 없습니다.")
+            return
+        }
+        var moved = 0
+        groups.forEach { (date, sameDay) ->
+            val base = runCatching { LocalDate.parse(date) }.getOrNull() ?: return@forEach
+            val ordered = sameDay.sortedWith(compareBy({ it.sessionIndex }, { it.recordedAt }))
+            ordered.forEachIndexed { i, log ->
+                val shift = (ordered.size - 1 - i).toLong()
+                if (shift > 0L) {
+                    container.repository.updateLog(log.copy(date = base.minusDays(shift).toString()))
+                    moved++
+                }
+            }
+        }
+        _message.value = UiMessage("기록 ${moved}건을 하루 간격으로 펼쳤습니다.")
+    }
+
+    /** 같은 날짜에 두 건 이상 몰려 있는지 (기록 화면에서 정리 버튼을 띄울지 판단). */
+    fun hasSameDayClusters(): Boolean =
+        data.value.logs.groupBy { it.date }.any { it.value.size > 1 }
+
     fun deleteLog(logId: String) {
         container.repository.deleteLog(logId)
         loadedSessionKey = null

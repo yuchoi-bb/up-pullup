@@ -48,10 +48,18 @@ import com.pullup.tracker.ui.MainViewModel
 import com.pullup.tracker.ui.components.BarEntry
 import com.pullup.tracker.ui.components.RepsBarChart
 import com.pullup.tracker.ui.components.SectionCard
+import com.pullup.tracker.ui.components.WorkoutCalendar
 import com.pullup.tracker.ui.components.StatTile
 import java.time.LocalDate
+import java.time.YearMonth
 
 private enum class HistorySort { DATE, REPS }
+
+/** YearMonth는 기본 Saver가 없어서 "2026-09" 문자열로 저장한다. */
+private val YearMonthSaver = androidx.compose.runtime.saveable.Saver<YearMonth, String>(
+    save = { it.toString() },
+    restore = { runCatching { YearMonth.parse(it) }.getOrDefault(YearMonth.now()) }
+)
 
 @Composable
 fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
@@ -73,6 +81,15 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     }
     var pendingDelete by remember { mutableStateOf<SessionLog?>(null) }
     var editing by remember { mutableStateOf<SessionLog?>(null) }
+    var month by rememberSaveable(stateSaver = YearMonthSaver) { mutableStateOf(YearMonth.now()) }
+    var selectedDay by remember { mutableStateOf<LocalDate?>(null) }
+
+    // 날짜별 총 개수 (하루에 두 번 했으면 합산)
+    val byDay = remember(data.logs) {
+        data.logs.mapNotNull { log ->
+            runCatching { LocalDate.parse(log.date) }.getOrNull()?.let { it to log.total }
+        }.groupBy({ it.first }, { it.second }).mapValues { it.value.sum() }
+    }
 
     // 차트는 정렬과 무관하게 항상 시간순(오래된 것 -> 최근)
     val chartLogs = remember(data.logs) {
@@ -115,6 +132,59 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                 StatTile("최근 7일", "${stats.last7Days}", "개", Modifier.weight(1f))
                 StatTile("최근 30일", "${stats.last30Days}", "개", Modifier.weight(1f))
                 StatTile("총 세션", "${stats.sessionCount}", "회", Modifier.weight(1f))
+            }
+        }
+
+        item {
+            val monthDays = byDay.filterKeys { YearMonth.from(it) == month }
+            SectionCard(
+                title = "달력",
+                trailing = {
+                    Text(
+                        "${monthDays.size}일 · 총 ${monthDays.values.sum()}개",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            ) {
+                WorkoutCalendar(
+                    month = month,
+                    workoutDays = byDay,
+                    trainingDays = (viewModel.plan?.trainingDays ?: emptyList()).toSet(),
+                    onMonthChange = { month = it; selectedDay = null },
+                    selected = selectedDay,
+                    onSelectDay = { selectedDay = if (selectedDay == it) null else it }
+                )
+                val picked = selectedDay
+                if (picked != null) {
+                    Spacer(Modifier.height(12.dp))
+                    val dayLogs = data.logs.filter { it.date == picked.toString() }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(13.dp)) {
+                            Text(DateUtils.label(picked), style = MaterialTheme.typography.titleMedium)
+                            Spacer(Modifier.height(4.dp))
+                            if (dayLogs.isEmpty()) {
+                                Text(
+                                    "이 날은 기록이 없습니다.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                dayLogs.forEach { log ->
+                                    Text(
+                                        "${log.exercise} ${log.repsText} · 총 ${log.total}개" +
+                                            if (log.fromTasks) " · Tasks에서 체크" else "",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

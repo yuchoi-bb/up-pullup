@@ -61,6 +61,7 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val rest by viewModel.restRemaining.collectAsState()
     val busy by viewModel.busy.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val syncing by viewModel.syncing.collectAsState()
 
     val plan = viewModel.plan
     val session = viewModel.currentSession()
@@ -167,6 +168,11 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     when {
                         !viewModel.googleConfigured ->
                             "기록은 이 기기에 저장됩니다. 설정 → 데이터에서 백업 파일로 빼 둘 수 있어요."
+                        syncing -> "Google 할 일과 맞추는 중..."
+                        settings.taskListId == null ->
+                            "설정에서 Google 할 일 목록을 고르면 오늘 할 운동이 그쪽에도 올라갑니다."
+                        data.pendingTask != null ->
+                            "Google 할 일에 올라가 있습니다. 거기서 체크해도 앱에 반영됩니다."
                         !settings.autoSync ->
                             "Google 자동 업로드가 꺼져 있습니다. 설정에서 켤 수 있어요."
                         else ->

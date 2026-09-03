@@ -71,6 +71,8 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val update by viewModel.update.collectAsState()
     val coach by viewModel.coach.collectAsState()
     val busy by viewModel.busy.collectAsState()
+    val syncing by viewModel.syncing.collectAsState()
+    val data by viewModel.data.collectAsState()
     val context = LocalContext.current
 
     val signInLauncher = rememberLauncherForActivityResult(
@@ -146,6 +148,29 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                         onRefresh = viewModel::refreshTaskLists,
                         busy = busy
                     )
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("오늘 할 운동 올리기", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (data.pendingTask != null) {
+                                    "올라가 있음 · Tasks에서 체크하면 앱에 반영됩니다"
+                                } else {
+                                    "아직 안 올라감"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { viewModel.syncWithGoogleTasks(silent = false) },
+                            enabled = !syncing
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (syncing) "동기화 중" else "지금 동기화")
+                        }
+                    }
                     Spacer(Modifier.height(12.dp))
                     ToggleRow(
                         label = "기록하면 자동으로 업로드",

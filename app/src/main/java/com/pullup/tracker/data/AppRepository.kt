@@ -134,7 +134,8 @@ class AppRepository(private val context: Context) {
         sets: List<SetEntry>,
         note: String,
         autoRegulate: Boolean,
-        date: LocalDate = LocalDate.now()
+        date: LocalDate = LocalDate.now(),
+        source: String = SessionLog.SOURCE_APP
     ): SessionLog {
         val done = sets.sumOf { it.done }
         val target = sets.sumOf { it.target }
@@ -153,7 +154,8 @@ class AppRepository(private val context: Context) {
             sets = sets,
             note = note,
             recordedAt = System.currentTimeMillis(),
-            advanceBy = advance
+            advanceBy = advance,
+            source = source
         )
         mutate { it.copy(logs = it.logs + log) }
         return log
@@ -175,6 +177,22 @@ class AppRepository(private val context: Context) {
                 }
             })
         }
+
+    // ---------------------------------------------------------------- Google Tasks 미할 일
+
+    fun setPendingTask(pending: PendingTask?) = mutate { it.copy(pendingTask = pending) }
+
+    /**
+     * 올려 둔 항목이 지금 플랜 상태와 맞는지. 계획을 바꿨거나 기록을 지워서
+     * 진행 위치가 달라졌으면 낡은 것이므로 새로 만들어야 한다.
+     */
+    fun isPendingTaskStale(data: AppData, taskListId: String?): Boolean {
+        val pending = data.pendingTask ?: return true
+        val plan = planOf(data) ?: return true
+        return pending.taskListId != taskListId ||
+            pending.planId != plan.id ||
+            pending.position != currentSessionPosition(data, plan)
+    }
 
     // ---------------------------------------------------------------- 통계
 

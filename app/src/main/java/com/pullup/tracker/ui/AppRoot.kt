@@ -65,6 +65,8 @@ fun AppRoot(viewModel: MainViewModel = viewModel()) {
 
     LaunchedEffect(Unit) {
         if (settings.autoCheckUpdate) viewModel.checkUpdate(silent = true)
+        // Google Tasks는 변경 알림을 주지 않으므로, 앱을 열 때마다 직접 확인한다.
+        viewModel.syncWithGoogleTasks()
     }
 
     Scaffold(

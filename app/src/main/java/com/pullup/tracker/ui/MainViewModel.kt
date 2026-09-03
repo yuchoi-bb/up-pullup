@@ -11,6 +11,7 @@ import com.pullup.tracker.ai.CoachPrompts
 import com.pullup.tracker.ai.GeneratedPlan
 import com.pullup.tracker.data.AppSettings
 import com.pullup.tracker.data.DateUtils
+import com.pullup.tracker.data.PendingTask
 import com.pullup.tracker.data.PlanGenerator
 import com.pullup.tracker.data.PlanSession
 import com.pullup.tracker.data.SessionLog
@@ -64,6 +65,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
+
+    private val _syncing = MutableStateFlow(false)
+    val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
 
     private val _repsInput = MutableStateFlow<List<Int>>(emptyList())
     val repsInput: StateFlow<List<Int>> = _repsInput.asStateFlow()
@@ -159,6 +163,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _busy.value = true
+            val pending = data.value.pendingTask
             val log = container.repository.recordSession(
                 plan = currentPlan,
                 session = session,
@@ -171,10 +176,185 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _message.value = UiMessage("총 ${log.total}개 기록 완료!")
 
             if (settings.value.autoSync && googleStatus.value.signedIn && settings.value.taskListId != null) {
-                syncLogInternal(log)
+                _syncing.value = true
+                closePendingTask(pending, log)
+                runCatching { ensurePendingTask() }
+                _syncing.value = false
             }
             _busy.value = false
         }
+    }
+
+    /**
+     * 앱에서 운동을 마쳤을 때: Tasks에 올려 둔 "할 일"을 새로 만들지 않고
+     * 완료로 바꾼다. 실제로 한 개수로 제목도 고쳐 준다.
+     */
+    private suspend fun closePendingTask(pending: PendingTask?, log: SessionLog) {
+        val current = settings.value
+        val listId = current.taskListId ?: return
+        runCatching {
+            val token = container.google.accessToken()
+            val title = renderTitle(current.taskTitleTemplate, log)
+            val notes = buildNotes(log)
+            if (pending != null && pending.taskListId == listId) {
+                container.tasks.completeTask(token, listId, pending.taskId, title, notes)
+                pending.taskId
+            } else {
+                // 올려 둔 항목이 없으면(연동 직후 등) 완료 상태로 새로 만든다.
+                container.tasks.createCompletedTask(
+                    accessToken = token,
+                    taskListId = listId,
+                    title = title,
+                    notes = notes,
+                    date = runCatching { LocalDate.parse(log.date) }.getOrDefault(LocalDate.now())
+                )
+            }
+        }.onSuccess { taskId ->
+            container.repository.attachTask(log.id, taskId, listId, current.taskListTitle, null)
+            container.repository.setPendingTask(null)
+        }.onFailure { error ->
+            container.repository.attachTask(log.id, null, listId, current.taskListTitle, error.message)
+            _message.value = UiMessage(error.message ?: "Google 동기화에 실패했습니다.", isError = true)
+        }
+    }
+
+    private fun buildNotes(log: SessionLog): String = buildString {
+        append("세트: ${log.sets.joinToString(" / ") { "${it.done}/${it.target}" }}\n")
+        append("총 ${log.total}개 (목표 ${log.targetTotal}개)")
+        if (log.note.isNotBlank()) append("\n메모: ${log.note}")
+        append("\n\n업풀업 앱에서 기록")
+    }
+
+    // ------------------------------------------------------------ Tasks 양방향 동기화
+
+    /**
+     * Google Tasks와 앱 상태를 맞춘다.
+     *
+     *  1. 올려 둔 할 일이 Tasks에서 체크됐으면 -> 앱에도 완료로 기록하고 플랜을 넘긴다
+     *  2. Tasks에서 지워졌으면 -> 참조를 버린다
+     *  3. 다음에 할 세션이 아직 안 올라가 있으면 -> 미완료 상태로 하나 올린다
+     *
+     * Google Tasks는 변경 알림을 보내주지 않아서, 앱을 열 때마다 이 함수를 부른다.
+     */
+    fun syncWithGoogleTasks(silent: Boolean = true) {
+        if (!googleStatus.value.signedIn || settings.value.taskListId == null) return
+        if (_syncing.value) return
+        viewModelScope.launch {
+            _syncing.value = true
+            runCatching {
+                pullCompletionFromTasks()
+                ensurePendingTask()
+            }.onFailure {
+                if (!silent) _message.value = UiMessage(it.message ?: "동기화 실패", isError = true)
+            }
+            _syncing.value = false
+        }
+    }
+
+    /** Tasks 쪽에서 체크된 걸 앱 기록으로 가져온다. */
+    private suspend fun pullCompletionFromTasks() {
+        val pending = data.value.pendingTask ?: return
+        val listId = settings.value.taskListId ?: return
+        if (pending.taskListId != listId) {
+            container.repository.setPendingTask(null)
+            return
+        }
+        val token = container.google.accessToken()
+        val remote = container.tasks.fetchTask(token, listId, pending.taskId)
+        if (remote == null) {                       // Tasks에서 지움
+            container.repository.setPendingTask(null)
+            return
+        }
+        if (!remote.completed) return
+
+        val currentPlan = plan ?: return
+        val session = currentSession() ?: return
+        if (session.index != pending.sessionIndex) {  // 그새 플랜이 바뀜
+            container.repository.setPendingTask(null)
+            return
+        }
+        // Tasks에서는 실제 개수를 알 수 없으므로 목표를 채운 것으로 본다.
+        val sets = session.targets.map { SetEntry(it, it) }
+        val date = remote.completedAt
+            ?.let { runCatching { LocalDate.parse(it.substring(0, 10)) }.getOrNull() }
+            ?: LocalDate.now()
+        val log = container.repository.recordSession(
+            plan = currentPlan,
+            session = session,
+            sets = sets,
+            note = "Google 할 일에서 완료 체크",
+            autoRegulate = settings.value.autoRegulate,
+            date = date,
+            source = SessionLog.SOURCE_TASKS
+        )
+        container.repository.attachTask(
+            log.id, pending.taskId, listId, settings.value.taskListTitle, null
+        )
+        container.repository.setPendingTask(null)
+        loadedSessionKey = null
+        _message.value = UiMessage("Google 할 일에서 체크한 ${log.total}개를 기록에 반영했습니다.")
+    }
+
+    /** 다음에 할 세션을 Tasks에 미완료 항목으로 올려 둔다(이미 맞는 게 있으면 그대로). */
+    private suspend fun ensurePendingTask() {
+        val listId = settings.value.taskListId ?: return
+        val currentPlan = plan ?: return
+        val session = currentSession() ?: return
+        val snapshot = data.value
+        val position = container.repository.currentSessionPosition(snapshot, currentPlan)
+        val title = renderPlannedTitle(settings.value.taskTitleTemplate, currentPlan, session)
+        val due = projectedDate(session.index)
+
+        val existing = snapshot.pendingTask
+        val token = container.google.accessToken()
+
+        if (!container.repository.isPendingTaskStale(snapshot, listId) && existing != null) {
+            if (existing.title != title) {           // 목표만 바뀐 경우 제목/기한 갱신
+                container.tasks.updatePendingTask(token, listId, existing.taskId, title, plannedNotes(session), due)
+                container.repository.setPendingTask(existing.copy(title = title, dueDate = due.toString()))
+            }
+            return
+        }
+
+        // 낡은 항목이 남아 있으면 지운다 (사용자 목록에 쓰레기를 남기지 않는다)
+        if (existing != null) {
+            runCatching { container.tasks.deleteTask(token, existing.taskListId, existing.taskId) }
+        }
+
+        val taskId = container.tasks.createPendingTask(
+            accessToken = token,
+            taskListId = listId,
+            title = title,
+            notes = plannedNotes(session),
+            due = due
+        )
+        container.repository.setPendingTask(
+            PendingTask(
+                taskId = taskId,
+                taskListId = listId,
+                planId = currentPlan.id,
+                sessionIndex = session.index,
+                position = position,
+                title = title,
+                dueDate = due.toString(),
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    private fun renderPlannedTitle(template: String, plan: TrainingPlan, session: PlanSession): String =
+        template
+            .replace("{exercise}", plan.exercise)
+            .replace("{total}", session.total.toString())
+            .replace("{sets}", session.targets.joinToString("/"))
+            .replace("{date}", projectedDate(session.index).toString())
+            .replace("{session}", session.index.toString())
+
+    private fun plannedNotes(session: PlanSession): String = buildString {
+        append("목표: ${session.targets.joinToString(" / ") { "${it}개" }}\n")
+        append("합계 ${session.total}개")
+        if (session.note.isNotBlank()) append("\n${session.note}")
+        append("\n\n여기서 체크하면 업풀업 앱 기록에도 반영됩니다.")
     }
 
     fun syncLog(logId: String) {
@@ -197,12 +377,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             val token = container.google.accessToken()
             val title = renderTitle(current.taskTitleTemplate, log)
-            val notes = buildString {
-                append("세트: ${log.sets.joinToString(" / ") { "${it.done}/${it.target}" }}\n")
-                append("총 ${log.total}개 (목표 ${log.targetTotal}개)")
-                if (log.note.isNotBlank()) append("\n메모: ${log.note}")
-                append("\n\n업풀업 앱에서 기록")
-            }
+            val notes = buildNotes(log)
             container.tasks.createCompletedTask(
                 accessToken = token,
                 taskListId = listId,
@@ -230,6 +405,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.repository.deleteLog(logId)
         loadedSessionKey = null
         _message.value = UiMessage("기록을 삭제했습니다.")
+        syncWithGoogleTasks()          // 진행 위치가 되돌아갔으니 할 일도 다시 만든다
     }
 
     // ------------------------------------------------------------ Google 연동
@@ -280,8 +456,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectTaskList(ref: TaskListRef) =
+    fun selectTaskList(ref: TaskListRef) {
         container.settings.update { it.copy(taskListId = ref.id, taskListTitle = ref.title) }
+        syncWithGoogleTasks()          // 고른 목록에 오늘 할 일을 바로 올린다
+    }
 
     // ------------------------------------------------------------ 설정
 
@@ -348,6 +526,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setActivePlan(planId: String) {
         container.repository.setActivePlan(planId)
         loadedSessionKey = null
+        syncWithGoogleTasks()
     }
 
     fun deletePlan(planId: String) {
@@ -443,6 +622,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadedSessionKey = null
         _coach.value = _coach.value.copy(generated = null)
         _message.value = UiMessage("'${plan.name}' 플랜을 적용했습니다.")
+        syncWithGoogleTasks()
     }
 
     fun askCoach(question: String) {

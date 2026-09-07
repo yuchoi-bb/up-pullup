@@ -2,6 +2,8 @@ package com.pullup.tracker
 
 import com.pullup.tracker.data.DateUtils
 import com.pullup.tracker.data.PlanGenerator
+import com.pullup.tracker.data.SessionLog
+import com.pullup.tracker.data.SetEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -103,5 +105,67 @@ class TaskDueDateTest {
         val friday = LocalDate.of(2026, 9, 11)               // 금요일
         val saturday = LocalDate.of(2026, 9, 12)
         assertEquals(saturday, DateUtils.nextTaskDue(friday, didSomethingToday = true))
+    }
+}
+
+/** 목표를 못 채웠을 때(실패) 어떻게 되는지. */
+class FailureTest {
+
+    private fun log(vararg pairs: Pair<Int, Int>) = SessionLog(
+        id = "x",
+        planId = "p",
+        sessionIndex = 3,
+        exercise = "풀업",
+        date = "2026-09-07",
+        sets = pairs.map { (target, done) -> SetEntry(target, done) },
+        recordedAt = 0L
+    )
+
+    @Test
+    fun `합계가 목표에 못 미치면 실패다`() {
+        val miss = log(6 to 6, 6 to 5, 6 to 4, 4 to 2, 4 to 0)      // 17 / 26
+        assertTrue(miss.failed)
+        assertEquals(26, miss.targetTotal)
+        assertEquals(17, miss.total)
+        assertEquals(9, miss.shortfall)
+    }
+
+    @Test
+    fun `세트별로 갈려도 합계만 채우면 실패가 아니다`() {
+        // 1세트에서 몰아서 하고 뒤에서 모자라도 합계가 목표면 통과
+        val ok = log(6 to 10, 6 to 6, 6 to 6, 4 to 2, 4 to 2)       // 26 / 26
+        assertTrue(!ok.failed)
+        assertEquals(0, ok.shortfall)
+    }
+
+    @Test
+    fun `실패는 자동 조절 설정과 무관하게 같은 세션을 다시 한다`() {
+        assertEquals(0, PlanGenerator.advanceBy(done = 17, target = 26, autoRegulate = true))
+        assertEquals(0, PlanGenerator.advanceBy(done = 17, target = 26, autoRegulate = false))
+        assertEquals(0, PlanGenerator.advanceBy(done = 25, target = 26, autoRegulate = false))
+    }
+
+    @Test
+    fun `목표를 채우면 한 칸 전진한다`() {
+        assertEquals(1, PlanGenerator.advanceBy(done = 26, target = 26, autoRegulate = true))
+        assertEquals(1, PlanGenerator.advanceBy(done = 26, target = 26, autoRegulate = false))
+    }
+
+    @Test
+    fun `크게 초과하면 자동 조절이 켜졌을 때만 건너뛴다`() {
+        assertEquals(2, PlanGenerator.advanceBy(done = 34, target = 26, autoRegulate = true))
+        assertEquals(1, PlanGenerator.advanceBy(done = 34, target = 26, autoRegulate = false))
+        // 경계: 딱 +8이면 건너뛴다
+        assertEquals(2, PlanGenerator.advanceBy(done = 26 + 8, target = 26, autoRegulate = true))
+        assertEquals(1, PlanGenerator.advanceBy(done = 26 + 7, target = 26, autoRegulate = true))
+    }
+
+    @Test
+    fun `실패를 거듭해도 세션 위치는 그대로다`() {
+        // advanceBy 합이 곧 진행 위치다. 세 번 실패하면 합은 0.
+        val attempts = listOf(17, 20, 24).map { PlanGenerator.advanceBy(it, 26, autoRegulate = true) }
+        assertEquals(0, attempts.sum())
+        // 네 번째에 채우면 그제서야 한 칸
+        assertEquals(1, attempts.sum() + PlanGenerator.advanceBy(26, 26, autoRegulate = true))
     }
 }

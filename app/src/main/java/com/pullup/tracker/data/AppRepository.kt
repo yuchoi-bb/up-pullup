@@ -139,12 +139,7 @@ class AppRepository(private val context: Context) {
     ): SessionLog {
         val done = sets.sumOf { it.done }
         val target = sets.sumOf { it.target }
-        val advance = when {
-            !autoRegulate -> 1
-            done < target -> 0            // 목표 미달 -> 같은 세션 한 번 더
-            done >= target + 8 -> 2       // 크게 초과 -> 한 세션 건너뛰기
-            else -> 1
-        }
+        val advance = PlanGenerator.advanceBy(done, target, autoRegulate)
         val log = SessionLog(
             id = UUID.randomUUID().toString(),
             planId = plan.id,
@@ -160,6 +155,19 @@ class AppRepository(private val context: Context) {
         mutate { it.copy(logs = it.logs + log) }
         return log
     }
+
+    /**
+     * 이 세션을 지금까지 몇 번 시도했는지(실패한 시도 포함).
+     * 다음 시도는 이 값 + 1 회차다.
+     */
+    fun attemptsOf(data: AppData, planId: String, sessionIndex: Int): Int =
+        data.logs.count { it.planId == planId && it.sessionIndex == sessionIndex }
+
+    /** 이 세션에서 목표를 못 채운 시도들. 오래된 것부터. */
+    fun failedAttempts(data: AppData, planId: String, sessionIndex: Int): List<SessionLog> =
+        data.logs
+            .filter { it.planId == planId && it.sessionIndex == sessionIndex && it.failed }
+            .sortedBy { it.recordedAt }
 
     fun deleteLog(logId: String) = mutate { d -> d.copy(logs = d.logs.filterNot { it.id == logId }) }
 

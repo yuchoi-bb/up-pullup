@@ -14,6 +14,20 @@ import java.util.UUID
  */
 object PlanGenerator {
 
+    /**
+     * 기록 한 건이 플랜을 몇 칸 전진시키는지. 0이면 같은 세션을 다시 한다.
+     *
+     * 실패(목표 미달)는 자동 조절 설정과 무관하게 언제나 0이다. 못 채운 걸
+     * 채우려고 다시 하는 것이라 목표를 낮추지도 않는다.
+     */
+    fun advanceBy(done: Int, target: Int, autoRegulate: Boolean): Int = when {
+        done < target -> 0
+        !autoRegulate -> 1
+        done >= target + 8 -> 2       // 크게 초과 -> 한 세션 건너뛰기
+        else -> 1
+    }
+
+
     const val DEFAULT_INCREMENTS_PER_SESSION = 2
     const val DEFAULT_CONSOLIDATE_EVERY = 5
 

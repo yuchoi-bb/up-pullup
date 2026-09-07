@@ -54,6 +54,11 @@ sealed interface KeyCheck {
     data class Failed(val reason: String) : KeyCheck
 }
 
+/** 같은 세션을 다시 하는 중일 때 오늘 화면에 띄울 정보. */
+data class RetryState(val attempt: Int, val failures: List<SessionLog>) {
+    val lastFailure: SessionLog get() = failures.last()
+}
+
 data class CoachUiState(
     val busy: Boolean = false,
     val generated: GeneratedPlan? = null,
@@ -200,7 +205,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 stopRest()
                 loadedSessionKey = null
-                _message.value = UiMessage("총 ${log.total}개 기록 완료!")
+                _message.value = if (log.failed) {
+                    UiMessage(
+                        "총 ${log.total}개 — 목표 ${log.targetTotal}개에 ${log.shortfall}개 부족합니다. " +
+                            "같은 세션을 다시 합니다.",
+                        isError = true
+                    )
+                } else {
+                    UiMessage("총 ${log.total}개 기록 완료!")
+                }
 
                 if (settings.value.autoSync && googleStatus.value.signedIn && settings.value.taskListId != null) {
                     _syncing.value = true
@@ -224,7 +237,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val listId = current.taskListId ?: return
         runCatching {
             val token = container.google.accessToken()
-            val title = renderTitle(current.taskTitleTemplate, log)
+            val title = completedTitle(current.taskTitleTemplate, log)
             val notes = buildNotes(log)
             if (pending != null && pending.taskListId == listId) {
                 container.tasks.completeTask(token, listId, pending.taskId, title, notes)
@@ -251,8 +264,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildNotes(log: SessionLog): String = buildString {
         append("세트: ${log.sets.joinToString(" / ") { "${it.done}/${it.target}" }}\n")
         append("총 ${log.total}개 (목표 ${log.targetTotal}개)")
+        if (log.failed) {
+            append("\n결과: 실패 — ${log.shortfall}개 부족. 같은 세션을 다시 합니다.")
+        }
         if (log.note.isNotBlank()) append("\n메모: ${log.note}")
         append("\n\n업풀업 앱에서 기록")
+    }
+
+    /**
+     * 완료로 닫는 항목의 제목. 실패한 시도도 "시도했다"는 사실은 완료로 남기되,
+     * 제목만 봐도 실패인 줄 알도록 표시한다. 재도전 항목은 따로 새로 올라간다.
+     */
+    private fun completedTitle(template: String, log: SessionLog): String {
+        val base = renderTitle(template, log)
+        return if (log.failed) "❌ $base — 실패 (목표 ${log.targetTotal}개, ${log.shortfall}개 부족)" else base
     }
 
     // ------------------------------------------------------------ Tasks 양방향 동기화
@@ -348,7 +373,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val snapshot = data.value
         val position = container.repository.currentSessionPosition(snapshot, currentPlan)
         val due = nextDueDate()
-        val title = renderPlannedTitle(settings.value.taskTitleTemplate, currentPlan, session, due)
+
+        // 이 세션을 이미 시도한 적이 있으면 다음은 재도전이다.
+        val attempt = container.repository.attemptsOf(snapshot, currentPlan.id, session.index) + 1
+        val pastFailures = container.repository.failedAttempts(snapshot, currentPlan.id, session.index)
+        val title = renderPlannedTitle(settings.value.taskTitleTemplate, currentPlan, session, due, attempt)
+        val notes = plannedNotes(session, pastFailures)
 
         val existing = snapshot.pendingTask
         val token = container.google.accessToken()
@@ -357,7 +387,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // 목표가 바뀌었거나 기한이 달라졌으면 고쳐 쓴다.
             // 기한 비교가 곧 "밀린 항목을 오늘로 당겨오는" 처리다.
             if (existing.title != title || existing.dueDate != due.toString()) {
-                container.tasks.updatePendingTask(token, listId, existing.taskId, title, plannedNotes(session), due)
+                container.tasks.updatePendingTask(token, listId, existing.taskId, title, notes, due)
                 container.repository.setPendingTask(existing.copy(title = title, dueDate = due.toString()))
             }
             return
@@ -372,7 +402,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             accessToken = token,
             taskListId = listId,
             title = title,
-            notes = plannedNotes(session),
+            notes = notes,
             due = due
         )
         container.repository.setPendingTask(
@@ -389,23 +419,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /**
+     * 올려 둘 "다음 세션" 제목. 2회차부터는 재도전이라는 걸 제목에 붙인다.
+     * 할 일 목록만 봐도 같은 운동을 다시 하는 중이라는 게 보여야 한다.
+     */
     private fun renderPlannedTitle(
         template: String,
         plan: TrainingPlan,
         session: PlanSession,
-        due: LocalDate
-    ): String =
-        template
+        due: LocalDate,
+        attempt: Int
+    ): String {
+        val base = template
             .replace("{exercise}", plan.exercise)
             .replace("{total}", session.total.toString())
             .replace("{sets}", session.targets.joinToString("/"))
             .replace("{date}", due.toString())
             .replace("{session}", session.index.toString())
+        return if (attempt > 1) "$base (재도전 ${attempt}회차)" else base
+    }
 
-    private fun plannedNotes(session: PlanSession): String = buildString {
+    private fun plannedNotes(session: PlanSession, pastFailures: List<SessionLog>): String = buildString {
         append("목표: ${session.targets.joinToString(" / ") { "${it}개" }}\n")
         append("합계 ${session.total}개")
         if (session.note.isNotBlank()) append("\n${session.note}")
+        if (pastFailures.isNotEmpty()) {
+            append("\n\n지난 시도 ${pastFailures.size}번 모두 목표 미달")
+            pastFailures.takeLast(5).forEach { log ->
+                append("\n- ${DateUtils.short(log.date)} ${log.total}개 (${log.repsText}) — ${log.shortfall}개 부족")
+            }
+            append("\n채울 때까지 목표는 그대로 둡니다.")
+        }
         append("\n\n여기서 체크하면 업풀업 앱 기록에도 반영됩니다.")
     }
 
@@ -426,7 +470,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         runCatching {
             val token = container.google.accessToken()
-            val title = renderTitle(current.taskTitleTemplate, log)
+            val title = completedTitle(current.taskTitleTemplate, log)
             val notes = buildNotes(log)
             container.tasks.createCompletedTask(
                 accessToken = token,
@@ -855,6 +899,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun unknownSourcesIntent(): Intent = container.updates.unknownSourcesSettingsIntent()
 
     // ------------------------------------------------------------ 공통
+
+    /**
+     * 지금 세션이 재도전인지. 회차와 지난 실패 기록을 함께 준다.
+     * 아직 한 번도 시도 안 한 세션이면 null.
+     */
+    fun retryState(): RetryState? {
+        val currentPlan = plan ?: return null
+        val session = currentSession() ?: return null
+        val snapshot = data.value
+        val failures = container.repository.failedAttempts(snapshot, currentPlan.id, session.index)
+        if (failures.isEmpty()) return null
+        val attempt = container.repository.attemptsOf(snapshot, currentPlan.id, session.index) + 1
+        return RetryState(attempt = attempt, failures = failures)
+    }
 
     fun consumeMessage() {
         _message.value = null

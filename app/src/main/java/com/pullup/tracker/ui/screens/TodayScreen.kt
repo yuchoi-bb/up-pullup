@@ -47,6 +47,7 @@ import com.pullup.tracker.data.DateUtils
 import com.pullup.tracker.data.PlanSession
 import com.pullup.tracker.data.SessionLog
 import com.pullup.tracker.ui.MainViewModel
+import com.pullup.tracker.ui.RetryState
 import com.pullup.tracker.ui.components.Pill
 import com.pullup.tracker.ui.components.ProgressBarThick
 import com.pullup.tracker.ui.components.SectionCard
@@ -68,6 +69,7 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val stats = viewModel.stats()
     val position = viewModel.sessionPosition()
     val todayLog = viewModel.todayLog()
+    val retry = viewModel.retryState()
     val previous = data.logs.sortedByDescending { it.recordedAt }.firstOrNull { it.date != LocalDate.now().toString() }
 
     LaunchedEffect(plan?.id, session?.index, position) {
@@ -108,6 +110,10 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
         item { LastSessionCard(previous) }
 
         if (session != null && plan != null) {
+            // 목표를 못 채운 세션은 채울 때까지 다시 나온다. 왜 같은 숫자가
+            // 또 떠 있는지 화면에서 바로 알 수 있어야 한다.
+            if (retry != null) item { RetryCard(retry) }
+
             item {
                 TodayTargetCard(
                     session = session,
@@ -194,6 +200,31 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
 
         if (todayLog != null) {
             item { TodayDoneCard(todayLog) { viewModel.syncLog(todayLog.id) } }
+        }
+    }
+}
+
+@Composable
+private fun RetryCard(retry: RetryState) {
+    val last = retry.lastFailure
+    SectionCard(title = "재도전 ${retry.attempt}회차") {
+        Text(
+            "지난번에 목표를 ${last.shortfall}개 못 채웠습니다. 같은 목표로 다시 합니다.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "${DateUtils.short(last.date)} — ${last.total}개 (${last.repsText}), 목표 ${last.targetTotal}개",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (retry.failures.size > 1) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "이 세션에서 ${retry.failures.size}번 미달했습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }

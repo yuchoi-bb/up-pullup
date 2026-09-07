@@ -69,6 +69,15 @@ data class SessionLog(
     val total: Int get() = sets.sumOf { it.done }
     val targetTotal: Int get() = sets.sumOf { it.target }
     val synced: Boolean get() = taskId != null
+
+    /**
+     * 목표 개수를 못 채운 시도. 실패해도 기록은 남기고, 같은 세션을 다시 한다.
+     *
+     * Google 할 일에서 체크한 기록은 실제 개수를 알 수 없어 목표치로 채우므로
+     * 여기서 실패로 잡히지 않는다(개수가 달랐다면 앱에서 다시 넣으면 된다).
+     */
+    val failed: Boolean get() = total < targetTotal
+    val shortfall: Int get() = (targetTotal - total).coerceAtLeast(0)
     val repsText: String get() = sets.joinToString("/") { it.done.toString() }
     val fromTasks: Boolean get() = source == SOURCE_TASKS
 

@@ -177,7 +177,8 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                                 dayLogs.forEach { log ->
                                     Text(
                                         "${log.exercise} ${log.repsText} · 총 ${log.total}개" +
-                                            if (log.fromTasks) " · Tasks에서 체크" else "",
+                                            (if (log.failed) " · 실패(${log.shortfall}개 부족)" else "") +
+                                            (if (log.fromTasks) " · Tasks에서 체크" else ""),
                                         style = MaterialTheme.typography.bodyMedium
                                     )
                                 }
@@ -373,6 +374,13 @@ private fun LogRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (log.failed) {
+                    Text(
+                        "실패 — ${log.shortfall}개 부족, 같은 세션 다시",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 if (log.note.isNotBlank()) {
                     Text(
                         log.note,

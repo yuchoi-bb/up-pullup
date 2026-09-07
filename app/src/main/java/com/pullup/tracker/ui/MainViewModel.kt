@@ -44,12 +44,23 @@ data class UpdateUiState(
     val checkedOnce: Boolean = false
 )
 
+/**
+ * "키 확인" 결과. 스낵바는 4초면 사라져서 놓치기 쉬우니 카드에 그대로 남겨 둔다.
+ */
+sealed interface KeyCheck {
+    data object Idle : KeyCheck
+    data object Checking : KeyCheck
+    data class Ok(val models: Int) : KeyCheck
+    data class Failed(val reason: String) : KeyCheck
+}
+
 data class CoachUiState(
     val busy: Boolean = false,
     val generated: GeneratedPlan? = null,
     val answer: String = "",
     val error: String? = null,
-    val availableModels: List<String> = emptyList()
+    val availableModels: List<String> = emptyList(),
+    val keyCheck: KeyCheck = KeyCheck.Idle
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -65,6 +76,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
+
+    /**
+     * busy 플래그를 반드시 되돌린다.
+     *
+     * 예전에는 블록 끝에서 false로 내렸는데, 중간에 예외가 나면 true로 굳어
+     * 버렸다. 설정 화면 버튼이 전부 `enabled = !busy`라서, 그때부터는 눌러도
+     * 아무 반응이 없었다(앱을 다시 켜야 풀림).
+     */
+    private suspend fun <T> withBusy(block: suspend () -> T): T {
+        _busy.value = true
+        try {
+            return block()
+        } finally {
+            _busy.value = false
+        }
+    }
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
@@ -162,26 +189,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sets = session.targets.mapIndexed { i, target -> SetEntry(target, reps.getOrElse(i) { 0 }) }
 
         viewModelScope.launch {
-            _busy.value = true
-            val pending = data.value.pendingTask
-            val log = container.repository.recordSession(
-                plan = currentPlan,
-                session = session,
-                sets = sets,
-                note = _note.value,
-                autoRegulate = settings.value.autoRegulate
-            )
-            stopRest()
-            loadedSessionKey = null
-            _message.value = UiMessage("총 ${log.total}개 기록 완료!")
+            withBusy {
+                val pending = data.value.pendingTask
+                val log = container.repository.recordSession(
+                    plan = currentPlan,
+                    session = session,
+                    sets = sets,
+                    note = _note.value,
+                    autoRegulate = settings.value.autoRegulate
+                )
+                stopRest()
+                loadedSessionKey = null
+                _message.value = UiMessage("총 ${log.total}개 기록 완료!")
 
-            if (settings.value.autoSync && googleStatus.value.signedIn && settings.value.taskListId != null) {
-                _syncing.value = true
-                closePendingTask(pending, log)
-                runCatching { ensurePendingTask() }
-                _syncing.value = false
+                if (settings.value.autoSync && googleStatus.value.signedIn && settings.value.taskListId != null) {
+                    _syncing.value = true
+                    try {
+                        closePendingTask(pending, log)
+                        runCatching { ensurePendingTask() }
+                    } finally {
+                        _syncing.value = false
+                    }
+                }
             }
-            _busy.value = false
         }
     }
 
@@ -382,9 +412,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun syncLog(logId: String) {
         val log = data.value.logs.firstOrNull { it.id == logId } ?: return
         viewModelScope.launch {
-            _busy.value = true
-            syncLogInternal(log)
-            _busy.value = false
+            withBusy { syncLogInternal(log) }
         }
     }
 
@@ -479,14 +507,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
-            _busy.value = true
-            container.google.handleAuthorizationResult(data)
-                .onSuccess {
-                    _message.value = UiMessage("Google 계정을 연결했습니다.")
-                    refreshTaskLists()
-                }
-                .onFailure { _message.value = UiMessage(it.message ?: "로그인 실패", isError = true) }
-            _busy.value = false
+            withBusy {
+                container.google.handleAuthorizationResult(data)
+                    .onSuccess {
+                        _message.value = UiMessage("Google 계정을 연결했습니다.")
+                        refreshTaskLists()
+                    }
+                    .onFailure { _message.value = UiMessage(it.message ?: "로그인 실패", isError = true) }
+            }
         }
     }
 
@@ -498,20 +526,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshTaskLists() {
         viewModelScope.launch {
-            _busy.value = true
-            runCatching {
-                val token = container.google.accessToken()
-                container.tasks.listTaskLists(token)
-            }.onSuccess { lists ->
-                _taskLists.value = lists
-                if (settings.value.taskListId == null && lists.isNotEmpty()) {
-                    val guess = lists.firstOrNull { it.title.contains("운동") } ?: lists.first()
-                    selectTaskList(guess)
+            withBusy {
+                runCatching {
+                    val token = container.google.accessToken()
+                    container.tasks.listTaskLists(token)
+                }.onSuccess { lists ->
+                    _taskLists.value = lists
+                    if (settings.value.taskListId == null && lists.isNotEmpty()) {
+                        val guess = lists.firstOrNull { it.title.contains("운동") } ?: lists.first()
+                        selectTaskList(guess)
+                    }
+                }.onFailure {
+                    _message.value = UiMessage(it.message ?: "할 일 목록을 불러오지 못했습니다.", isError = true)
                 }
-            }.onFailure {
-                _message.value = UiMessage(it.message ?: "할 일 목록을 불러오지 못했습니다.", isError = true)
             }
-            _busy.value = false
         }
     }
 
@@ -546,39 +574,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun writeBackup(resolver: ContentResolver, uri: Uri) {
         viewModelScope.launch {
-            _busy.value = true
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val text = container.repository.exportBackupText()
-                    resolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) }
-                        ?: throw IllegalStateException("파일을 열 수 없습니다.")
-                    text.length
+            withBusy {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        val text = container.repository.exportBackupText()
+                        resolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) }
+                            ?: throw IllegalStateException("파일을 열 수 없습니다.")
+                        text.length
+                    }
+                }.onSuccess {
+                    _message.value = UiMessage("백업을 저장했습니다. 앱을 다시 설치한 뒤 이 파일로 복원하세요.")
+                }.onFailure {
+                    _message.value = UiMessage(it.message ?: "백업 저장에 실패했습니다.", isError = true)
                 }
-            }.onSuccess {
-                _message.value = UiMessage("백업을 저장했습니다. 앱을 다시 설치한 뒤 이 파일로 복원하세요.")
-            }.onFailure {
-                _message.value = UiMessage(it.message ?: "백업 저장에 실패했습니다.", isError = true)
             }
-            _busy.value = false
         }
     }
 
     fun readBackup(resolver: ContentResolver, uri: Uri) {
         viewModelScope.launch {
-            _busy.value = true
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val text = resolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
-                        ?: throw IllegalStateException("파일을 열 수 없습니다.")
-                    container.repository.importBackupText(text)
+            withBusy {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        val text = resolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                            ?: throw IllegalStateException("파일을 열 수 없습니다.")
+                        container.repository.importBackupText(text)
+                    }
+                }.onSuccess { count ->
+                    loadedSessionKey = null
+                    _message.value = UiMessage("기록 ${count}개를 복원했습니다.")
+                }.onFailure {
+                    _message.value = UiMessage(it.message ?: "백업 파일을 읽지 못했습니다.", isError = true)
                 }
-            }.onSuccess { count ->
-                loadedSessionKey = null
-                _message.value = UiMessage("기록 ${count}개를 복원했습니다.")
-            }.onFailure {
-                _message.value = UiMessage(it.message ?: "백업 파일을 읽지 못했습니다.", isError = true)
             }
-            _busy.value = false
         }
     }
 
@@ -712,22 +740,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 키가 살아있는지 확인한다.
+     *
+     * 전역 busy를 쓰지 않고 자체 상태를 둔다. 다른 작업이 busy를 붙들고 있어도
+     * 이 버튼만은 눌리게 하려는 것이고, 결과도 스낵바 대신 카드에 남겨서
+     * 4초 뒤에 사라지지 않게 한다.
+     */
     fun verifyGeminiKey() {
+        if (_coach.value.keyCheck == KeyCheck.Checking) return
         val key = settings.value.geminiApiKey
         if (key.isBlank()) {
-            _message.value = UiMessage("Gemini API 키를 입력해 주세요.", isError = true)
+            _coach.value = _coach.value.copy(keyCheck = KeyCheck.Failed("API 키를 먼저 입력해 주세요."))
             return
         }
         viewModelScope.launch {
-            _busy.value = true
-            runCatching { container.gemini.listModels(key) }
-                .onSuccess { models ->
-                    _coach.value = _coach.value.copy(availableModels = models)
-                    _message.value = UiMessage("키 확인 완료 — 사용 가능한 모델 ${models.size}개")
+            _coach.value = _coach.value.copy(keyCheck = KeyCheck.Checking)
+            val result = runCatching { container.gemini.listModels(key) }
+            _coach.value = result.fold(
+                onSuccess = { models ->
+                    _coach.value.copy(
+                        availableModels = models,
+                        keyCheck = if (models.isEmpty()) {
+                            // 200은 왔는데 목록이 비었다면 키가 이 API에 묶여 있지 않은 경우다.
+                            KeyCheck.Failed("응답은 왔지만 쓸 수 있는 Gemini 모델이 없습니다. Google AI Studio에서 만든 키가 맞는지 확인해 주세요.")
+                        } else {
+                            KeyCheck.Ok(models.size)
+                        }
+                    )
+                },
+                onFailure = { error ->
+                    _coach.value.copy(keyCheck = KeyCheck.Failed(describeKeyFailure(error)))
                 }
-                .onFailure { _message.value = UiMessage(it.message ?: "키 확인 실패", isError = true) }
-            _busy.value = false
+            )
         }
+    }
+
+    /** 확인 실패 원인을 그대로 보여 준다. 원인 없이 "실패"만 뜨면 손쓸 방법이 없다. */
+    private fun describeKeyFailure(error: Throwable): String {
+        val raw = error.message?.takeIf { it.isNotBlank() }
+        return when {
+            error is java.net.UnknownHostException ->
+                "인터넷에 연결되어 있지 않거나 generativelanguage.googleapis.com에 닿지 못했습니다."
+            error is java.net.SocketTimeoutException ->
+                "응답이 없어 시간이 초과됐습니다. 잠시 뒤 다시 눌러 주세요."
+            error is javax.net.ssl.SSLException ->
+                "보안 연결에 실패했습니다 (${raw ?: "SSL 오류"})."
+            error is java.io.IOException ->
+                "네트워크 오류: ${raw ?: error.javaClass.simpleName}"
+            raw != null -> raw
+            else -> "확인 실패: ${error.javaClass.simpleName}"
+        }
+    }
+
+    fun clearKeyCheck() {
+        _coach.value = _coach.value.copy(keyCheck = KeyCheck.Idle)
     }
 
     fun clearCoachError() {

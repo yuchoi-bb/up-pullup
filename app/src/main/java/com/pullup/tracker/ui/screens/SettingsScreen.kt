@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -59,6 +60,7 @@ import com.pullup.tracker.BuildConfig
 import com.pullup.tracker.ai.GeminiClient
 import com.pullup.tracker.data.DateUtils
 import com.pullup.tracker.google.AppSigningInfo
+import com.pullup.tracker.ui.KeyCheck
 import com.pullup.tracker.ui.MainViewModel
 import com.pullup.tracker.ui.components.Pill
 import com.pullup.tracker.ui.components.SectionCard
@@ -200,7 +202,10 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             SectionCard(title = "Gemini AI") {
                 OutlinedTextField(
                     value = settings.geminiApiKey,
-                    onValueChange = { value -> viewModel.updateSettings { it.copy(geminiApiKey = value.trim()) } },
+                    onValueChange = { value ->
+                        viewModel.updateSettings { it.copy(geminiApiKey = value.trim()) }
+                        viewModel.clearKeyCheck()      // 키를 고치면 지난 결과는 의미가 없다
+                    },
                     label = { Text("Gemini API 키") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
@@ -224,9 +229,50 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     onSelect = { value -> viewModel.updateSettings { it.copy(geminiModel = value) } }
                 )
                 Spacer(Modifier.height(10.dp))
-                Row {
-                    OutlinedButton(onClick = viewModel::verifyGeminiKey, enabled = !busy) { Text("키 확인") }
+                val keyCheck = coach.keyCheck
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 전역 busy와 무관하게 항상 누를 수 있다.
+                    OutlinedButton(
+                        onClick = viewModel::verifyGeminiKey,
+                        enabled = keyCheck != KeyCheck.Checking
+                    ) { Text("키 확인") }
+                    if (keyCheck == KeyCheck.Checking) {
+                        Spacer(Modifier.width(10.dp))
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("확인 중...", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
+
+                // 결과는 스낵바가 아니라 여기에 남긴다. 눌러도 아무 일도 없는 것처럼
+                // 보이던 게 이 화면의 가장 큰 문제였다.
+                when (keyCheck) {
+                    is KeyCheck.Ok -> {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "✅ 키 정상 — 사용 가능한 Gemini 모델 ${keyCheck.models}개",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "위 모델 목록에서 고르면 됩니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    is KeyCheck.Failed -> {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "❌ ${keyCheck.reason}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                    else -> Unit
+                }
+
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "키는 이 기기에만 저장되며 Google AI Studio에서 발급받을 수 있습니다.",

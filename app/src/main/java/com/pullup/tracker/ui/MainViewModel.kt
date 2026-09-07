@@ -296,20 +296,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** 다음에 할 세션을 Tasks에 미완료 항목으로 올려 둔다(이미 맞는 게 있으면 그대로). */
+    /**
+     * 다음 할 일의 기한.
+     *
+     * 오늘 뭐라도 했으면 내일, 아직 안 했으면 오늘. 이 한 줄로 세 가지가 다 풀린다.
+     *  - 방금 끝낸 세션 때문에 다음 것이 오늘로 다시 잡히는 문제
+     *  - 하루에 여러 세션을 해도 기한이 모레·글피로 밀려나지 않는 것(내일에서 멈춤)
+     *  - 며칠 건너뛰어 기한이 지난 항목은 오늘 한 게 없으므로 자동으로 오늘로 당겨짐
+     *
+     * 운동 요일 설정은 일부러 보지 않는다. 쉬는 요일에도 "내일"로 잡아 달라는 선택.
+     */
+    private fun nextDueDate(): LocalDate {
+        val today = LocalDate.now()
+        return DateUtils.nextTaskDue(today, data.value.logs.any { it.date == today.toString() })
+    }
+
     private suspend fun ensurePendingTask() {
         val listId = settings.value.taskListId ?: return
         val currentPlan = plan ?: return
         val session = currentSession() ?: return
         val snapshot = data.value
         val position = container.repository.currentSessionPosition(snapshot, currentPlan)
-        val title = renderPlannedTitle(settings.value.taskTitleTemplate, currentPlan, session)
-        val due = projectedDate(session.index)
+        val due = nextDueDate()
+        val title = renderPlannedTitle(settings.value.taskTitleTemplate, currentPlan, session, due)
 
         val existing = snapshot.pendingTask
         val token = container.google.accessToken()
 
         if (!container.repository.isPendingTaskStale(snapshot, listId) && existing != null) {
-            if (existing.title != title) {           // 목표만 바뀐 경우 제목/기한 갱신
+            // 목표가 바뀌었거나 기한이 달라졌으면 고쳐 쓴다.
+            // 기한 비교가 곧 "밀린 항목을 오늘로 당겨오는" 처리다.
+            if (existing.title != title || existing.dueDate != due.toString()) {
                 container.tasks.updatePendingTask(token, listId, existing.taskId, title, plannedNotes(session), due)
                 container.repository.setPendingTask(existing.copy(title = title, dueDate = due.toString()))
             }
@@ -342,12 +359,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun renderPlannedTitle(template: String, plan: TrainingPlan, session: PlanSession): String =
+    private fun renderPlannedTitle(
+        template: String,
+        plan: TrainingPlan,
+        session: PlanSession,
+        due: LocalDate
+    ): String =
         template
             .replace("{exercise}", plan.exercise)
             .replace("{total}", session.total.toString())
             .replace("{sets}", session.targets.joinToString("/"))
-            .replace("{date}", projectedDate(session.index).toString())
+            .replace("{date}", due.toString())
             .replace("{session}", session.index.toString())
 
     private fun plannedNotes(session: PlanSession): String = buildString {

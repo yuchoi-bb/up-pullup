@@ -37,6 +37,20 @@ object DateUtils {
         return cursor
     }
 
+    /**
+     * Google 할 일에 올릴 "다음 세션"의 기한.
+     *
+     * 오늘 뭐라도 했으면 내일, 아직 안 했으면 오늘. 규칙이 이 한 줄이라
+     * 세 가지가 동시에 풀린다.
+     *  - 방금 끝낸 세션 때문에 다음 것이 다시 오늘로 잡히지 않는다
+     *  - 하루에 여러 세션을 해도 모레로 밀려나지 않고 내일에서 멈춘다
+     *  - 며칠 건너뛰어 기한이 지난 항목은, 오늘 한 게 없으므로 오늘로 당겨진다
+     *
+     * 운동 요일 설정은 일부러 보지 않는다(쉬는 요일에도 "내일"로 잡는 선택).
+     */
+    fun nextTaskDue(today: LocalDate, didSomethingToday: Boolean): LocalDate =
+        if (didSomethingToday) today.plusDays(1) else today
+
     fun relativeLabel(iso: String): String {
         val date = runCatching { LocalDate.parse(iso) }.getOrNull() ?: return iso
         val today = LocalDate.now()

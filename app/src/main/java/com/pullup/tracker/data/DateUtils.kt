@@ -21,21 +21,14 @@ object DateUtils {
 
     fun dayNameOf(value: Int): String = dayNames.getOrElse(value - 1) { "?" }
 
-    /** [start]부터 시작해 [days] 요일만 세면서 [sessionIndex](1-based)번째 운동일을 구한다. */
-    fun projectedDate(start: LocalDate, days: List<Int>, sessionIndex: Int): LocalDate {
-        val allowed = days.filter { it in 1..7 }.toSet().ifEmpty { (1..7).toSet() }
-        var cursor = start
-        var counted = 0
-        var guard = 0
-        while (guard++ < 4000) {
-            if (allowed.contains(cursor.dayOfWeek.value)) {
-                counted++
-                if (counted >= sessionIndex) return cursor
-            }
-            cursor = cursor.plusDays(1)
-        }
-        return cursor
-    }
+    /**
+     * 앞으로의 세션 예정일. 다음 세션이 [nextDue]에 오고, 그 뒤로는 하루에 하나씩.
+     *
+     * 할 일 기한과 같은 기준(매일)을 쓴다. 예전에는 운동 요일만 세어 계산했는데,
+     * 기한이 요일을 안 보게 바뀌면서 완주 예상일만 실제보다 늦게 나왔다.
+     */
+    fun forecastDate(nextDue: LocalDate, sessionsAhead: Int): LocalDate =
+        nextDue.plusDays(sessionsAhead.coerceAtLeast(0).toLong())
 
     /**
      * Google 할 일에 올릴 "다음 세션"의 기한.

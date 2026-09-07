@@ -795,12 +795,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stats() = container.repository.stats(data.value)
 
+    /**
+     * 플랜 화면에 보여줄 세션 날짜.
+     *
+     * 이미 끝낸 세션은 실제로 한 날짜를 그대로 쓴다(예보로 덮어쓰지 않는다).
+     * 앞으로 할 세션은 다음 할 일 기한부터 하루에 하나씩 잡는다.
+     */
     fun projectedDate(sessionIndex: Int): LocalDate {
         val currentPlan = plan ?: return LocalDate.now()
-        val start = runCatching { LocalDate.parse(currentPlan.startDate) }.getOrDefault(LocalDate.now())
         val done = sessionPosition()
-        val base = if (sessionIndex <= done) start else LocalDate.now()
-        val offset = if (sessionIndex <= done) sessionIndex else sessionIndex - done
-        return DateUtils.projectedDate(base, currentPlan.trainingDays, offset)
+
+        if (sessionIndex <= done) {
+            val actual = data.value.logs
+                .filter { it.planId == currentPlan.id && it.sessionIndex == sessionIndex }
+                .maxByOrNull { it.recordedAt }
+                ?.let { runCatching { LocalDate.parse(it.date) }.getOrNull() }
+            if (actual != null) return actual
+        }
+
+        return DateUtils.forecastDate(nextDueDate(), sessionIndex - done - 1)
     }
 }

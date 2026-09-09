@@ -30,6 +30,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -151,24 +152,58 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
 
             item {
                 val entered = reps.sum()
+                val shortfall = session.total - entered
+                val willFail = shortfall > 0
+
+                // 못 한 날 다섯 칸을 손으로 지우지 않게.
+                TextButton(
+                    onClick = viewModel::clearReps,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("오늘 못 했음 (전부 0개로)") }
+
                 Button(
                     onClick = viewModel::completeSession,
                     enabled = !busy,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp),
-                    shape = RoundedCornerShape(18.dp)
+                    shape = RoundedCornerShape(18.dp),
+                    // 실패로 남는 기록은 버튼 색부터 다르게 해서, 누르기 전에 안다.
+                    colors = if (willFail) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    }
                 ) {
                     if (busy) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            color = LocalContentColor.current
                         )
                         Spacer(Modifier.width(10.dp))
                     }
-                    Text("총 ${entered}개 기록하기", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (willFail) "실패로 기록하기 (총 ${entered}개)" else "총 ${entered}개 기록하기",
+                        style = MaterialTheme.typography.titleMedium
+                    )
                 }
+
+                if (willFail) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "목표 ${session.total}개에 ${shortfall}개 부족합니다. " +
+                            "Google 할 일에 실패로 올라가고, 같은 세션을 다시 합니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 Spacer(Modifier.height(6.dp))
                 Text(
                     when {

@@ -156,6 +156,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** "오늘 못 했음" — 전 세트를 0으로. 손으로 다섯 칸 지우지 않게. */
+    fun clearReps() {
+        _repsInput.value = _repsInput.value.map { 0 }
+        _setDone.value = _setDone.value.map { false }
+        stopRest()
+    }
+
     fun setNote(value: String) {
         _note.value = value
     }

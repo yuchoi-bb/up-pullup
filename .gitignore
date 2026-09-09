@@ -13,3 +13,8 @@ local.properties
 *.jks
 *.keystore
 keystore.properties
+
+# npx skills add 로 받은 외부 스킬 트리(7MB). 내용은 커밋하지 않고
+# skills-lock.json만 남겨서 `npx skills add`로 그대로 다시 받는다.
+.agents/
+.claude/skills/

@@ -368,7 +368,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * 운동 요일 설정은 일부러 보지 않는다. 쉬는 요일에도 "내일"로 잡아 달라는 선택.
      */
-    private fun nextDueDate(): LocalDate {
+    /**
+     * 다음 세션을 할 날. 오늘 뭐라도 했으면 내일, 아직 안 했으면 오늘.
+     *
+     * 할 일 기한과 오늘 화면의 카드 제목이 이걸 같이 쓴다. 예전엔 카드가
+     * 무조건 "오늘 목표"라, 방금 끝냈는데도 다음 세션을 오늘 또 해야 하는
+     * 것처럼 보였다.
+     */
+    fun nextDueDate(): LocalDate {
         val today = LocalDate.now()
         return DateUtils.nextTaskDue(today, data.value.logs.any { it.date == today.toString() })
     }

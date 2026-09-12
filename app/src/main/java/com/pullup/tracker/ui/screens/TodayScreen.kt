@@ -71,6 +71,7 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val position = viewModel.sessionPosition()
     val todayLog = viewModel.todayLog()
     val retry = viewModel.retryState()
+    val due = viewModel.nextDueDate()
     val previous = data.logs.sortedByDescending { it.recordedAt }.firstOrNull { it.date != LocalDate.now().toString() }
 
     LaunchedEffect(plan?.id, session?.index, position) {
@@ -122,6 +123,7 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     totalSessions = plan.sessions.size,
                     reps = reps,
                     done = done,
+                    due = due,
                     onReps = viewModel::setReps,
                     onToggle = viewModel::toggleSet
                 )
@@ -304,14 +306,31 @@ private fun TodayTargetCard(
     totalSessions: Int,
     reps: List<Int>,
     done: List<Boolean>,
+    due: LocalDate,
     onReps: (Int, Int) -> Unit,
     onToggle: (Int) -> Unit
 ) {
     val entered = reps.sum()
+    val today = LocalDate.now()
+    // 오늘 몫을 이미 끝냈으면 여기 떠 있는 건 내일 것이다. 제목이 계속
+    // "오늘 목표"라, 방금 기록했는데 또 해야 하는 것처럼 보였다.
+    val forToday = !due.isAfter(today)
     SectionCard(
-        title = "오늘 목표",
+        title = when {
+            forToday -> "오늘 목표"
+            due == today.plusDays(1) -> "다음 목표 · 내일"
+            else -> "다음 목표 · ${DateUtils.short(due.toString())}"
+        },
         trailing = { Text("세션 ${position + 1} / $totalSessions", style = MaterialTheme.typography.labelMedium) }
     ) {
+        if (!forToday) {
+            Text(
+                "오늘 몫은 끝냈습니다. 미리 해도 되고, 기록하면 이 세션을 당겨서 한 것으로 남습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+        }
         Row(verticalAlignment = Alignment.Bottom) {
             Text("${session.total}", style = MaterialTheme.typography.displaySmall)
             Spacer(Modifier.width(4.dp))

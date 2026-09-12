@@ -69,10 +69,11 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val session = viewModel.currentSession()
     val stats = viewModel.stats()
     val position = viewModel.sessionPosition()
-    val todayLog = viewModel.todayLog()
     val retry = viewModel.retryState()
     val due = viewModel.nextDueDate()
-    val previous = data.logs.sortedByDescending { it.recordedAt }.firstOrNull { it.date != LocalDate.now().toString() }
+    // 가장 최근 세션. 오늘 것을 빼지 않는다 — 방금 기록했는데 카드에 어제가
+    // 남아 있으면 반영이 안 된 것처럼 보인다.
+    val latest = data.logs.maxByOrNull { it.recordedAt }
 
     LaunchedEffect(plan?.id, session?.index, position) {
         viewModel.prepareInputs(session)
@@ -109,7 +110,7 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             }
         }
 
-        item { LastSessionCard(previous) }
+        item { LastSessionCard(latest) { latest?.let { viewModel.syncLog(it.id) } } }
 
         if (session != null && plan != null) {
             // 목표를 못 채운 세션은 채울 때까지 다시 나온다. 왜 같은 숫자가
@@ -235,9 +236,6 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             }
         }
 
-        if (todayLog != null) {
-            item { TodayDoneCard(todayLog) { viewModel.syncLog(todayLog.id) } }
-        }
     }
 }
 
@@ -267,34 +265,79 @@ private fun RetryCard(retry: RetryState) {
 }
 
 @Composable
-private fun LastSessionCard(previous: SessionLog?) {
-    SectionCard(title = "지난 기록") {
-        if (previous == null) {
+private fun LastSessionCard(latest: SessionLog?, onRetry: () -> Unit) {
+    SectionCard(title = "최근 기록") {
+        if (latest == null) {
             Text(
                 "아직 기록이 없습니다. 오늘이 1일차!",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        DateUtils.relativeLabel(previous.date),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text("${previous.exercise} ${previous.repsText}", style = MaterialTheme.typography.titleLarge)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("${previous.total}개", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "목표 ${previous.targetTotal}개",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            return@SectionCard
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    DateUtils.relativeLabel(latest.date),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("${latest.exercise} ${latest.repsText}", style = MaterialTheme.typography.titleLarge)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("${latest.total}개", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "목표 ${latest.targetTotal}개",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (latest.failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+        }
+
+        if (latest.failed) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "${latest.shortfall}개 부족 — 같은 세션을 다시 합니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        // 동기화 상태는 여기 같이 둔다. 예전엔 화면 맨 아래 "오늘 기록됨"
+        // 카드에 따로 있어서, 같은 기록이 위아래로 두 번 보였다.
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (latest.synced) {
+                Pill(
+                    "Google 동기화됨",
+                    icon = Icons.Default.CheckCircle,
+                    container = MaterialTheme.colorScheme.secondaryContainer,
+                    content = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            } else {
+                FilledTonalButton(
+                    onClick = onRetry,
+                    colors = ButtonDefaults.filledTonalButtonColors()
+                ) {
+                    Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("다시 올리기")
                 }
             }
+        }
+        if (latest.syncError != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                latest.syncError,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }
@@ -454,43 +497,3 @@ private fun RestCard(remaining: Int, total: Int, onSkip: () -> Unit, onRestart: 
     }
 }
 
-@Composable
-private fun TodayDoneCard(log: SessionLog, onRetry: () -> Unit) {
-    SectionCard(title = "오늘 기록됨") {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("${log.exercise} ${log.repsText}", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "총 ${log.total}개",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (log.synced) {
-                Pill(
-                    "Google 동기화됨",
-                    icon = Icons.Default.CheckCircle,
-                    container = MaterialTheme.colorScheme.secondaryContainer,
-                    content = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            } else {
-                FilledTonalButton(
-                    onClick = onRetry,
-                    colors = ButtonDefaults.filledTonalButtonColors()
-                ) {
-                    Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("다시 올리기")
-                }
-            }
-        }
-        if (log.syncError != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                log.syncError,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
-    }
-}

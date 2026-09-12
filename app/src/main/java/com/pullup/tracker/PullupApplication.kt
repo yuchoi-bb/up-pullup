@@ -9,6 +9,7 @@ import com.pullup.tracker.data.AppRepository
 import com.pullup.tracker.data.SettingsRepository
 import com.pullup.tracker.google.GoogleAccountManager
 import com.pullup.tracker.google.GoogleTasksClient
+import com.pullup.tracker.health.HealthConnectRepository
 import com.pullup.tracker.reminder.ReminderScheduler
 import com.pullup.tracker.update.UpdateManager
 
@@ -19,6 +20,7 @@ class AppContainer(context: Context) {
     val google = GoogleAccountManager(context)
     val tasks = GoogleTasksClient()
     val gemini = GeminiClient()
+    val health = HealthConnectRepository(context)
     val updates = UpdateManager(context)
 }
 

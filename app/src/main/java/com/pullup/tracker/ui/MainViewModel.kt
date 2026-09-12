@@ -18,6 +18,9 @@ import com.pullup.tracker.data.SessionLog
 import com.pullup.tracker.data.SetEntry
 import com.pullup.tracker.data.TaskListRef
 import com.pullup.tracker.data.TrainingPlan
+import com.pullup.tracker.health.HealthConnectRepository
+import com.pullup.tracker.health.HealthStatus
+import com.pullup.tracker.health.WatchSession
 import com.pullup.tracker.reminder.ReminderScheduler
 import com.pullup.tracker.update.ReleaseInfo
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +61,22 @@ sealed interface KeyCheck {
 data class RetryState(val attempt: Int, val failures: List<SessionLog>) {
     val lastFailure: SessionLog get() = failures.last()
 }
+
+/**
+ * 워치(가민 등)에서 읽어 온 오늘 운동 기록.
+ *
+ * 가민은 "운동을 했다"는 세션만 남기고 세트별 횟수는 안 쓴다. 그래서 이건
+ * 개수를 채워 주는 기능이 아니라 "오늘 한 거 기록하셨나요" 하고 짚어 주는
+ * 용도다. 개수는 사용자가 넣는다.
+ */
+data class WatchUiState(
+    val status: HealthStatus = HealthStatus.UNSUPPORTED,
+    val granted: Boolean = false,
+    val loading: Boolean = false,
+    val sessions: List<WatchSession> = emptyList(),
+    val error: String? = null,
+    val checkedOnce: Boolean = false
+)
 
 data class CoachUiState(
     val busy: Boolean = false,
@@ -122,6 +141,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _coach = MutableStateFlow(CoachUiState())
     val coach: StateFlow<CoachUiState> = _coach.asStateFlow()
+
+    private val _watch = MutableStateFlow(WatchUiState())
+    val watch: StateFlow<WatchUiState> = _watch.asStateFlow()
 
     private var loadedSessionKey: String? = null
 
@@ -926,6 +948,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (failures.isEmpty()) return null
         val attempt = container.repository.attemptsOf(snapshot, currentPlan.id, session.index) + 1
         return RetryState(attempt = attempt, failures = failures)
+    }
+
+    // ------------------------------------------------------------ 워치(Health Connect)
+
+    val healthPermissions: Set<String> get() = container.health.permissions
+
+    fun healthPermissionContract() = container.health.permissionContract()
+
+    /** 상태와 권한만 확인한다. 권한이 있으면 오늘 기록까지 읽는다. */
+    fun refreshWatch(date: LocalDate = LocalDate.now()) {
+        viewModelScope.launch {
+            val status = container.health.status()
+            if (status != HealthStatus.AVAILABLE) {
+                _watch.value = WatchUiState(status = status, checkedOnce = true)
+                return@launch
+            }
+
+            val granted = container.health.hasPermission()
+            if (!granted) {
+                _watch.value = WatchUiState(status = status, granted = false, checkedOnce = true)
+                return@launch
+            }
+
+            _watch.value = _watch.value.copy(
+                status = status,
+                granted = true,
+                loading = true,
+                error = null,
+                checkedOnce = true
+            )
+            runCatching { container.health.sessionsOn(date) }
+                .onSuccess { sessions ->
+                    _watch.value = _watch.value.copy(loading = false, sessions = sessions)
+                }
+                .onFailure { error ->
+                    _watch.value = _watch.value.copy(
+                        loading = false,
+                        error = error.message ?: "건강 기록을 읽지 못했습니다."
+                    )
+                }
+        }
+    }
+
+    /**
+     * 워치 기록을 메모에 붙인다. 개수는 건드리지 않는다 —
+     * 가민이 안 알려 주는 값을 지어내지 않는다.
+     */
+    fun useWatchSession(session: WatchSession) {
+        val range = HealthConnectRepository.timeRange(session)
+        val line = "가민 ${session.title} $range (${session.minutes}분)"
+        _note.value = if (_note.value.isBlank()) line else "${_note.value}\n$line"
+
+        if (session.reps != null) {
+            // 혹시 횟수가 들어 있으면 그건 그대로 쓴다.
+            val total = session.reps
+            _message.value = UiMessage("워치 기록 ${total}개를 메모에 넣었습니다. 세트별 숫자는 확인해 주세요.")
+        } else {
+            _message.value = UiMessage("메모에 넣었습니다. 개수는 직접 입력해 주세요.")
+        }
     }
 
     fun consumeMessage() {

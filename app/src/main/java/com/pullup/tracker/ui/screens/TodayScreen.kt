@@ -40,15 +40,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
 import com.pullup.tracker.data.DateUtils
 import com.pullup.tracker.data.PlanSession
 import com.pullup.tracker.data.SessionLog
+import com.pullup.tracker.health.HealthConnectRepository
+import com.pullup.tracker.health.HealthStatus
+import com.pullup.tracker.health.WatchSession
 import com.pullup.tracker.ui.MainViewModel
 import com.pullup.tracker.ui.RetryState
+import com.pullup.tracker.ui.WatchUiState
 import com.pullup.tracker.ui.components.Pill
 import com.pullup.tracker.ui.components.ProgressBarThick
 import com.pullup.tracker.ui.components.SectionCard
@@ -74,6 +80,16 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     // 가장 최근 세션. 오늘 것을 빼지 않는다 — 방금 기록했는데 카드에 어제가
     // 남아 있으면 반영이 안 된 것처럼 보인다.
     val latest = data.logs.maxByOrNull { it.recordedAt }
+    val watch by viewModel.watch.collectAsState()
+
+    // 계약 객체를 매 recomposition마다 새로 만들면 런처가 다시 등록된다.
+    val healthContract = remember { viewModel.healthPermissionContract() }
+    val healthPermissionLauncher = rememberLauncherForActivityResult(healthContract) {
+        viewModel.refreshWatch()
+    }
+
+    // 화면에 들어올 때마다 본다. 워치가 나중에 동기화되는 일이 흔하다.
+    LaunchedEffect(Unit) { viewModel.refreshWatch() }
 
     LaunchedEffect(plan?.id, session?.index, position) {
         viewModel.prepareInputs(session)
@@ -111,6 +127,16 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
         }
 
         item { LastSessionCard(latest) { latest?.let { viewModel.syncLog(it.id) } } }
+
+        if (watch.checkedOnce && watch.status != HealthStatus.UNSUPPORTED) {
+            item {
+                WatchCard(
+                    watch = watch,
+                    onConnect = { healthPermissionLauncher.launch(viewModel.healthPermissions) },
+                    onUse = viewModel::useWatchSession
+                )
+            }
+        }
 
         if (session != null && plan != null) {
             // 목표를 못 채운 세션은 채울 때까지 다시 나온다. 왜 같은 숫자가
@@ -236,6 +262,76 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             }
         }
 
+    }
+}
+
+@Composable
+private fun WatchCard(
+    watch: WatchUiState,
+    onConnect: () -> Unit,
+    onUse: (WatchSession) -> Unit
+) {
+    SectionCard(title = "워치 기록") {
+        when {
+            watch.status == HealthStatus.NEEDS_INSTALL -> Text(
+                "Health Connect를 설치하거나 업데이트하면 가민 기록을 볼 수 있습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            !watch.granted -> {
+                Text(
+                    "가민 등 워치가 남긴 운동 기록을 읽어옵니다. 읽기만 하고 쓰지 않습니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                FilledTonalButton(onClick = onConnect) { Text("건강 기록 연결") }
+            }
+
+            watch.loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("읽는 중...", style = MaterialTheme.typography.bodySmall)
+            }
+
+            watch.error != null -> Text(
+                watch.error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+
+            watch.sessions.isEmpty() -> Text(
+                "오늘 워치에 기록된 운동이 없습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            else -> {
+                watch.sessions.forEachIndexed { index, session ->
+                    if (index > 0) Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(session.title, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                HealthConnectRepository.timeRange(session) +
+                                    " · ${session.minutes}분" +
+                                    (session.reps?.let { " · ${it}개" } ?: ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { onUse(session) }) { Text("메모에 넣기") }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "워치는 운동을 했다는 사실과 시간만 남깁니다. 개수는 아래에서 직접 넣어 주세요.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

@@ -949,6 +949,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 지금 세션이 재도전인지. 회차와 지난 실패 기록을 함께 준다.
      * 아직 한 번도 시도 안 한 세션이면 null.
      */
+    /** 이 루틴이 지금 재도전 중인지. 아직 한 번도 실패 안 했으면 null. */
+    fun retryStateOf(routine: TrainingPlan): RetryState? {
+        val session = sessionOf(routine) ?: return null
+        val snapshot = data.value
+        val failures = container.repository.failedAttempts(snapshot, routine.id, session.index)
+        if (failures.isEmpty()) return null
+        val attempt = container.repository.attemptsOf(snapshot, routine.id, session.index) + 1
+        return RetryState(attempt = attempt, failures = failures)
+    }
+
     fun retryState(): RetryState? {
         val currentPlan = plan ?: return null
         val session = currentSession() ?: return null

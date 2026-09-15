@@ -159,6 +159,7 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     position = viewModel.positionOf(routine),
                     reps = viewModel.repsFor(routine),
                     doneToday = viewModel.didToday(routine),
+                    retry = viewModel.retryStateOf(routine),
                     busy = busy,
                     onReps = { index, value -> viewModel.setRepsFor(routine, index, value) },
                     onClear = { viewModel.clearRepsFor(routine) },
@@ -189,26 +190,71 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
 }
 
 @Composable
-private fun RetryCard(retry: RetryState) {
-    val last = retry.lastFailure
-    SectionCard(title = "재도전 ${retry.attempt}회차") {
-        Text(
-            "지난번에 목표를 ${last.shortfall}개 못 채웠습니다. 같은 목표로 다시 합니다.",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "${DateUtils.short(last.date)} — ${last.total}개 (${last.repsText}), 목표 ${last.targetTotal}개",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (retry.failures.size > 1) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "이 세션에서 ${retry.failures.size}번 미달했습니다.",
+private fun WatchCard(
+    watch: WatchUiState,
+    onConnect: () -> Unit,
+    onUse: (WatchSession) -> Unit
+) {
+    SectionCard(title = "워치 기록") {
+        when {
+            watch.status == HealthStatus.NEEDS_INSTALL -> Text(
+                "Health Connect를 설치하거나 업데이트하면 가민 기록을 볼 수 있습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            !watch.granted -> {
+                Text(
+                    "가민 등 워치가 남긴 운동 기록을 읽어옵니다. 읽기만 하고 쓰지 않습니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                FilledTonalButton(onClick = onConnect) { Text("건강 기록 연결") }
+            }
+
+            watch.loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("읽는 중...", style = MaterialTheme.typography.bodySmall)
+            }
+
+            watch.error != null -> Text(
+                watch.error,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )
+
+            watch.sessions.isEmpty() -> Text(
+                "오늘 워치에 기록된 운동이 없습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            else -> {
+                watch.sessions.forEachIndexed { index, session ->
+                    if (index > 0) Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(session.title, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                HealthConnectRepository.timeRange(session) +
+                                    " · ${session.minutes}분" +
+                                    (session.reps?.let { " · ${it}개" } ?: ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { onUse(session) }) { Text("메모에 넣기") }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "워치는 운동을 했다는 사실과 시간만 남깁니다. 개수는 아래에서 직접 넣어 주세요.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -346,6 +392,7 @@ private fun CountedRoutineCard(
     position: Int,
     reps: List<Int>,
     doneToday: Boolean,
+    retry: RetryState?,
     busy: Boolean,
     onReps: (Int, Int) -> Unit,
     onClear: () -> Unit,
@@ -399,6 +446,17 @@ private fun CountedRoutineCard(
                 session.note,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // 왜 같은 숫자가 또 떠 있는지 여기서 바로 알 수 있어야 한다.
+        if (retry != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "재도전 ${retry.attempt}회차 — 지난번 ${retry.lastFailure.total}개로 " +
+                    "${retry.lastFailure.shortfall}개 모자랐습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
             )
         }
 

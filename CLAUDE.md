@@ -29,6 +29,22 @@
    그리고 이번에 추가한 심볼 이름이 오타 없이 잡히는지다.
    판단이 서지 않으면 **내가 안 건드린 파일에도 같은 오류가 나는지** 확인한다. 나오면 cascade다.
 2. 순수 JVM 데이터 계층(`data/`)은 Maven Central jar로 실제 컴파일해서 JUnit을 돌린다.
+3. **코드를 지웠으면 호출처가 남아 있는지 본다.** `unresolved reference`가 cascade에
+   묻혀서 로컬 검사로는 안 잡힌다. 아래를 돌려서 "프로젝트에 정의도 import도 없는
+   호출"이 비어 있는지 확인한다.
+
+```bash
+for f in $(find app/src/main/java -name '*.kt'); do
+  for name in $(grep -oE '(^|[^A-Za-z0-9_.])[A-Z][A-Za-z0-9]*\(' "$f" | grep -oE '[A-Z][A-Za-z0-9]*' | sort -u); do
+    grep -rqE "(fun|class|object|interface) $name[ (<]" app/src/main/java/ && continue
+    grep -qE "^import .*\.$name$" "$f" && continue
+    echo "$name <- $(basename $f)"
+  done
+done | sort -u
+```
+
+kotlin stdlib(`List`, `String`, `IllegalStateException`, `OptIn`…)과 확장 멤버만
+남아야 한다. 그 밖의 이름이 나오면 진짜로 빠진 것이다.
 
 ## 사용자
 

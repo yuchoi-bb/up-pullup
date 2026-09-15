@@ -47,6 +47,11 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # 기본값('tools platform-tools')의 'tools'는 Google SDK 저장소에서
+          # 내려가서 이제 설치가 실패한다. 빌드에 실제로 필요한 platform과
+          # build-tools는 Gradle(AGP)이 알아서 받으므로 여기서는 빼도 된다.
+          packages: 'platform-tools'
 
       - uses: gradle/actions/setup-gradle@v4
 

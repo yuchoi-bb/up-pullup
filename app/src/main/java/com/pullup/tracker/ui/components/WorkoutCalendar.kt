@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -37,8 +38,20 @@ import androidx.compose.ui.unit.dp
 import java.time.LocalDate
 import java.time.YearMonth
 
-/** 달력 한 칸의 상태. */
-private enum class DayState { EMPTY, REST, PLANNED_MISSED, DONE }
+/**
+ * 하루에 완료한 루틴 수에 따른 동그라미 반지름(칸 대비 비율). 바깥쪽부터.
+ *
+ * 많이 할수록 바깥 원이 커져서 그날이 꽉 차 보이고, 빠뜨리면 자연히
+ * 작아지거나 아예 안 그려진다.
+ */
+private val RING_SIZES: Map<Int, List<Float>> = mapOf(
+    1 to listOf(0.56f),
+    2 to listOf(0.78f, 0.50f),
+    3 to listOf(0.96f, 0.72f, 0.48f),
+    4 to listOf(1.00f, 0.80f, 0.60f, 0.40f)
+)
+
+private const val MAX_RINGS = 4
 
 /**
  * 월 단위 운동 달력.
@@ -49,7 +62,8 @@ private enum class DayState { EMPTY, REST, PLANNED_MISSED, DONE }
 @Composable
 fun WorkoutCalendar(
     month: YearMonth,
-    workoutDays: Map<LocalDate, Int>,
+    /** 날짜 -> 그날 완료한 루틴 수. 동그라미 겹 수가 이 값이다. */
+    doneCounts: Map<LocalDate, Int>,
     trainingDays: Set<Int>,
     onMonthChange: (YearMonth) -> Unit,
     modifier: Modifier = Modifier,
@@ -108,15 +122,11 @@ fun WorkoutCalendar(
                 week.forEach { date ->
                     DayCell(
                         date = date,
-                        state = when {
-                            date == null -> DayState.EMPTY
-                            workoutDays.containsKey(date) -> DayState.DONE
+                        doneCount = date?.let { doneCounts[it] } ?: 0,
+                        missed = date != null &&
+                            (doneCounts[date] ?: 0) == 0 &&
                             date.isBefore(today) &&
-                                (trainingDays.isEmpty() || trainingDays.contains(date.dayOfWeek.value)) ->
-                                DayState.PLANNED_MISSED
-                            else -> DayState.REST
-                        },
-                        reps = date?.let { workoutDays[it] },
+                            (trainingDays.isEmpty() || trainingDays.contains(date.dayOfWeek.value)),
                         isToday = date == today,
                         isSelected = date != null && date == selected,
                         onClick = { date?.let(onSelectDay) },
@@ -131,18 +141,19 @@ fun WorkoutCalendar(
         }
 
         Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            LegendDot(MaterialTheme.colorScheme.primary, filled = true, label = "운동함")
-            LegendDot(MaterialTheme.colorScheme.outline, filled = false, label = "빠진 날")
-        }
+        Text(
+            "동그라미 겹 수 = 그날 끝낸 루틴 수. 빠뜨린 날은 작고 옅게 남습니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 @Composable
 private fun DayCell(
     date: LocalDate?,
-    state: DayState,
-    reps: Int?,
+    doneCount: Int,
+    missed: Boolean,
     isToday: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
@@ -156,70 +167,82 @@ private fun DayCell(
     ) {
         if (date == null) return@Box
 
-        val done = state == DayState.DONE
-        val base = when (state) {
-            DayState.DONE -> MaterialTheme.colorScheme.primary
-            DayState.PLANNED_MISSED -> Color.Transparent
-            else -> Color.Transparent
-        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(CircleShape)
-                .background(base)
-                .then(
-                    when {
-                        isToday -> Modifier.border(2.dp, MaterialTheme.colorScheme.secondary, CircleShape)
-                        isSelected -> Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
-                        state == DayState.PLANNED_MISSED ->
-                            Modifier.border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                        else -> Modifier
-                    }
-                )
-                .clickable(enabled = true, onClick = onClick),
+                .clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    date.dayOfMonth.toString(),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = if (done || isToday) FontWeight.Bold else FontWeight.Normal,
-                    color = when {
-                        done -> MaterialTheme.colorScheme.onPrimary
-                        state == DayState.PLANNED_MISSED -> MaterialTheme.colorScheme.onSurfaceVariant
-                        else -> MaterialTheme.colorScheme.onSurface
-                    }
+            // 오늘/선택 표시는 맨 바깥에 옅은 테두리로. 동그라미 겹과 섞이지 않게 한다.
+            if (isToday || isSelected) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .border(
+                            2.dp,
+                            if (isToday) {
+                                MaterialTheme.colorScheme.secondary
+                            } else {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                            },
+                            CircleShape
+                        )
                 )
-                if (done && reps != null) {
+            }
+
+            when {
+                doneCount > 0 -> {
+                    val rings = RING_SIZES[doneCount.coerceAtMost(MAX_RINGS)].orEmpty()
+                    rings.forEachIndexed { index, fraction ->
+                        // 가장 안쪽만 채우고 나머지는 테두리로 둬서 겹이 다 보이게 한다.
+                        val innermost = index == rings.lastIndex
+                        Box(
+                            Modifier
+                                .fillMaxSize(fraction)
+                                .clip(CircleShape)
+                                .then(
+                                    if (innermost) {
+                                        Modifier.background(MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                                    }
+                                )
+                        )
+                    }
+                }
+
+                missed -> Box(
+                    Modifier
+                        .fillMaxSize(0.42f)
+                        .clip(CircleShape)
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), CircleShape)
+                )
+            }
+
+            Text(
+                date.dayOfMonth.toString(),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (doneCount > 0 || isToday) FontWeight.Bold else FontWeight.Normal,
+                color = when {
+                    // 가운데가 채워져 있으면 글자는 그 위에 얹힌다.
+                    doneCount > 0 -> MaterialTheme.colorScheme.onPrimary
+                    missed -> MaterialTheme.colorScheme.onSurfaceVariant
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+            )
+
+            // 4개를 넘으면 겹으로는 구분이 안 되니 숫자를 작게 덧붙인다.
+            if (doneCount > MAX_RINGS) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
                     Text(
-                        reps.toString(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimary
+                        doneCount.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun LegendDot(color: Color, filled: Boolean, label: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier
-                .size(11.dp)
-                .clip(CircleShape)
-                .then(
-                    if (filled) Modifier.background(color)
-                    else Modifier.border(1.dp, color, CircleShape)
-                )
-        )
-        Spacer(Modifier.width(5.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }

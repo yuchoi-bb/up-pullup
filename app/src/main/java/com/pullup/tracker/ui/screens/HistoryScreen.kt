@@ -91,6 +91,9 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
         }.groupBy({ it.first }, { it.second }).mapValues { it.value.sum() }
     }
 
+    // 달력 동그라미용: 날짜별로 그날 끝낸 **루틴 수**
+    val doneCounts = remember(data.logs) { viewModel.completedCountsByDay() }
+
     // 차트는 정렬과 무관하게 항상 시간순(오래된 것 -> 최근)
     val chartLogs = remember(data.logs) {
         data.logs.sortedWith(compareBy<SessionLog> { it.date }.thenBy { it.sessionIndex })
@@ -136,12 +139,12 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
         }
 
         item {
-            val monthDays = byDay.filterKeys { YearMonth.from(it) == month }
+            val monthDays = doneCounts.filterKeys { YearMonth.from(it) == month }
             SectionCard(
                 title = "달력",
                 trailing = {
                     Text(
-                        "${monthDays.size}일 · 총 ${monthDays.values.sum()}개",
+                        "${monthDays.size}일 · 루틴 ${monthDays.values.sum()}회",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -149,8 +152,9 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             ) {
                 WorkoutCalendar(
                     month = month,
-                    workoutDays = byDay,
-                    trainingDays = (viewModel.plan?.trainingDays ?: emptyList()).toSet(),
+                    doneCounts = doneCounts,
+                    // 루틴마다 요일이 달라서, 하나라도 예정인 날을 "예정"으로 본다.
+                    trainingDays = viewModel.anyTrainingDays(),
                     onMonthChange = { month = it; selectedDay = null },
                     selected = selectedDay,
                     onSelectDay = { selectedDay = if (selectedDay == it) null else it }

@@ -79,16 +79,87 @@ object PlanGenerator {
         val sessions = ladder(start = listOf(6, 5, 5, 4, 4), goalPerSet = 20)
         return TrainingPlan(
             id = UUID.randomUUID().toString(),
-            name = "풀업 100 프로젝트",
+            name = "풀업",
             exercise = "풀업",
             goal = "5세트 × 20개 = 총 100개",
             startDate = startDate.toString(),
             trainingDays = trainingDays,
             sessions = sessions,
             createdAt = System.currentTimeMillis(),
-            source = TrainingPlan.SOURCE_BUILTIN
+            source = TrainingPlan.SOURCE_BUILTIN,
+            kind = TrainingPlan.KIND_COUNTED,
+            order = 0,
+            syncToTasks = true
         )
     }
+
+    /** 새로 고를 수 있는 횟수형 루틴 기본값. AI 없이 이 표와 사다리 계산만 쓴다. */
+    data class Preset(
+        val name: String,
+        val exercise: String,
+        val suggestedStart: List<Int>,
+        val suggestedGoalPerSet: Int
+    )
+
+    val PRESETS = listOf(
+        Preset("풀업", "풀업", listOf(6, 5, 5, 4, 4), 20),
+        Preset("푸시업", "푸시업", listOf(15, 12, 12, 10, 10), 30),
+        Preset("스쿼트", "스쿼트", listOf(20, 15, 15, 12, 12), 40),
+        Preset("딥스", "딥스", listOf(8, 6, 6, 5, 5), 20),
+        Preset("랫풀다운", "랫풀다운", listOf(12, 10, 10, 8, 8), 20),
+        Preset("플랭크(초)", "플랭크", listOf(40, 30, 30, 20, 20), 90),
+        Preset("크런치", "크런치", listOf(20, 15, 15, 12, 12), 40)
+    )
+
+    /**
+     * 시작 개수와 목표(세트당 개수 × 세트 수)만 받아 사다리를 만든다.
+     * 계산은 전부 [ladder] 안의 산술이고 AI는 쓰지 않는다.
+     */
+    fun countedRoutine(
+        name: String,
+        exercise: String,
+        start: List<Int>,
+        goalPerSet: Int,
+        trainingDays: List<Int>,
+        startDate: LocalDate,
+        order: Int
+    ): TrainingPlan {
+        val sets = start.size.coerceAtLeast(1)
+        return TrainingPlan(
+            id = UUID.randomUUID().toString(),
+            name = name,
+            exercise = exercise,
+            goal = "${sets}세트 × ${goalPerSet}개 = 총 ${sets * goalPerSet}개",
+            startDate = startDate.toString(),
+            trainingDays = trainingDays,
+            sessions = ladder(start, goalPerSet),
+            createdAt = System.currentTimeMillis(),
+            source = TrainingPlan.SOURCE_MANUAL,
+            kind = TrainingPlan.KIND_COUNTED,
+            order = order
+        )
+    }
+
+    /** 개수를 안 세는 루틴(스트레칭, 안구 운동 등). 했는지만 체크한다. */
+    fun checkRoutine(
+        name: String,
+        trainingDays: List<Int>,
+        startDate: LocalDate,
+        order: Int,
+        note: String = ""
+    ): TrainingPlan = TrainingPlan(
+        id = UUID.randomUUID().toString(),
+        name = name,
+        exercise = name,
+        goal = note.ifBlank { "매일 체크" },
+        startDate = startDate.toString(),
+        trainingDays = trainingDays,
+        sessions = emptyList(),
+        createdAt = System.currentTimeMillis(),
+        source = TrainingPlan.SOURCE_MANUAL,
+        kind = TrainingPlan.KIND_CHECK,
+        order = order
+    )
 
     /**
      * 목표 세션 수에 맞춰 증가 폭을 자동으로 고른다.

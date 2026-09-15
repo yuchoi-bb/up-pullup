@@ -103,6 +103,94 @@ class AppRepository(private val context: Context) {
         return plan.sessions.getOrNull(pos) ?: plan.sessions.lastOrNull()
     }
 
+    // ------------------------------------------------------------ 루틴 (여러 개)
+
+    /** 오늘 화면에 뜨는 루틴들. 숨긴 것은 뺀다. */
+    fun routines(data: AppData): List<TrainingPlan> =
+        data.plans.filterNot { it.archived }.sortedWith(compareBy({ it.order }, { it.createdAt }))
+
+    /** 그 루틴을 그날 했는지. 여러 번 했어도 하루 한 번으로 친다. */
+    fun didRoutineOn(data: AppData, routineId: String, date: LocalDate): Boolean =
+        data.logs.any { it.planId == routineId && it.date == date.toString() }
+
+    /**
+     * 그날 **완료한** 루틴 수. 달력 동그라미 겹 수가 이 값이다.
+     * 예정이 아니라 실제로 한 것만 센다.
+     */
+    fun completedCountOn(data: AppData, date: LocalDate): Int {
+        val iso = date.toString()
+        return data.logs.filter { it.date == iso }.map { it.planId }.distinct().size
+    }
+
+    /** 날짜별 완료 루틴 수. 달력이 한 번에 받아 간다. */
+    fun completedCountsByDay(data: AppData): Map<LocalDate, Int> =
+        data.logs
+            .mapNotNull { log -> runCatching { LocalDate.parse(log.date) }.getOrNull()?.let { it to log.planId } }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, ids) -> ids.distinct().size }
+
+    fun addRoutine(plan: TrainingPlan) = mutate { d ->
+        val nextOrder = (d.plans.maxOfOrNull { it.order } ?: -1) + 1
+        d.copy(
+            plans = d.plans + plan.copy(order = if (plan.order == 0) nextOrder else plan.order),
+            activePlanId = d.activePlanId ?: plan.id,
+            seeded = true
+        )
+    }
+
+    fun archiveRoutine(routineId: String, archived: Boolean = true) = mutate { d ->
+        d.copy(plans = d.plans.map { if (it.id == routineId) it.copy(archived = archived) else it })
+    }
+
+    /** 순서를 한 칸 올리거나 내린다. */
+    fun moveRoutine(routineId: String, delta: Int) = mutate { d ->
+        val ordered = d.plans.filterNot { it.archived }
+            .sortedWith(compareBy({ it.order }, { it.createdAt }))
+            .toMutableList()
+        val from = ordered.indexOfFirst { it.id == routineId }
+        val to = from + delta
+        if (from < 0 || to !in ordered.indices) return@mutate d
+        val moved = ordered.removeAt(from)
+        ordered.add(to, moved)
+        val reordered = ordered.mapIndexed { i, plan -> plan.id to i }.toMap()
+        d.copy(plans = d.plans.map { plan -> reordered[plan.id]?.let { plan.copy(order = it) } ?: plan })
+    }
+
+    /** 할 일 연동은 한 루틴만. 새로 켜면 나머지는 꺼진다. */
+    fun setSyncRoutine(routineId: String?) = mutate { d ->
+        d.copy(plans = d.plans.map { it.copy(syncToTasks = it.id == routineId) })
+    }
+
+    fun syncRoutine(data: AppData): TrainingPlan? =
+        routines(data).firstOrNull { it.syncToTasks && it.isCounted }
+
+    /**
+     * 체크형 루틴을 오늘 한 것으로 남긴다. 이미 했으면 되돌린다(토글).
+     * 개수가 없으므로 1/1 한 세트로 기록한다.
+     */
+    fun toggleCheck(routine: TrainingPlan, date: LocalDate = LocalDate.now()): Boolean {
+        val iso = date.toString()
+        val existing = _data.value.logs.filter { it.planId == routine.id && it.date == iso }
+        if (existing.isNotEmpty()) {
+            val ids = existing.map { it.id }.toSet()
+            mutate { d -> d.copy(logs = d.logs.filterNot { it.id in ids }) }
+            return false
+        }
+        val log = SessionLog(
+            id = UUID.randomUUID().toString(),
+            planId = routine.id,
+            sessionIndex = 0,
+            exercise = routine.exercise,
+            date = iso,
+            sets = listOf(SetEntry(1, 1)),
+            note = "",
+            recordedAt = System.currentTimeMillis(),
+            advanceBy = 0
+        )
+        mutate { it.copy(logs = it.logs + log) }
+        return true
+    }
+
     fun addPlan(plan: TrainingPlan, makeActive: Boolean = true) = mutate { d ->
         d.copy(
             plans = d.plans + plan,

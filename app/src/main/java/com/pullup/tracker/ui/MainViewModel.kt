@@ -149,7 +149,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ------------------------------------------------------------ 오늘 화면
 
-    val plan: TrainingPlan? get() = container.repository.planOf(data.value)
+    /**
+     * 할 일 연동과 플랜 탭이 기준으로 삼는 루틴 하나.
+     *
+     * 루틴이 여러 개가 됐지만 Google 할 일에는 한 번에 하나만 올린다(플랜이
+     * 날짜가 아니라 완료 횟수로 진행하기 때문). 지정이 없으면 첫 번째 횟수형 루틴.
+     */
+    val plan: TrainingPlan? get() =
+        container.repository.syncRoutine(data.value)
+            ?: container.repository.routines(data.value).firstOrNull { it.isCounted }
+            ?: container.repository.planOf(data.value)
 
     fun currentSession(): PlanSession? = container.repository.currentSession(data.value, plan)
 
@@ -297,7 +306,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             append("\n결과: 실패 — ${log.shortfall}개 부족. 같은 세션을 다시 합니다.")
         }
         if (log.note.isNotBlank()) append("\n메모: ${log.note}")
-        append("\n\n업풀업 앱에서 기록")
+        append("\n\nMXM 앱에서 기록")
     }
 
     /**
@@ -486,7 +495,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             append("\n채울 때까지 목표는 그대로 둡니다.")
         }
-        append("\n\n여기서 체크하면 업풀업 앱 기록에도 반영됩니다.")
+        append("\n\n여기서 체크하면 MXM 앱 기록에도 반영됩니다.")
     }
 
     fun syncLog(logId: String) {
@@ -948,6 +957,145 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (failures.isEmpty()) return null
         val attempt = container.repository.attemptsOf(snapshot, currentPlan.id, session.index) + 1
         return RetryState(attempt = attempt, failures = failures)
+    }
+
+    // ------------------------------------------------------------ 루틴 (여러 개)
+
+    fun routines(): List<TrainingPlan> = container.repository.routines(data.value)
+
+    fun sessionOf(routine: TrainingPlan): PlanSession? =
+        container.repository.currentSession(data.value, routine)
+
+    fun positionOf(routine: TrainingPlan): Int =
+        container.repository.currentSessionPosition(data.value, routine)
+
+    fun didToday(routine: TrainingPlan): Boolean =
+        container.repository.didRoutineOn(data.value, routine.id, LocalDate.now())
+
+    fun completedCountsByDay(): Map<LocalDate, Int> =
+        container.repository.completedCountsByDay(data.value)
+
+    /** 루틴마다 요일이 달라서, 하나라도 예정인 요일을 모아 준다. 비면 매일로 본다. */
+    fun anyTrainingDays(): Set<Int> {
+        val all = routines()
+        if (all.isEmpty() || all.any { it.trainingDays.isEmpty() }) return emptySet()
+        return all.flatMap { it.trainingDays }.toSet()
+    }
+
+    /** 체크형 루틴 토글. 눌러서 켜고, 다시 눌러 되돌린다. */
+    fun toggleCheckRoutine(routine: TrainingPlan) {
+        val nowDone = container.repository.toggleCheck(routine)
+        _message.value = UiMessage(
+            if (nowDone) "${routine.name} 완료!" else "${routine.name} 체크를 해제했습니다."
+        )
+    }
+
+    fun addCountedRoutine(
+        name: String,
+        exercise: String,
+        start: List<Int>,
+        goalPerSet: Int,
+        trainingDays: List<Int>
+    ) {
+        val routine = PlanGenerator.countedRoutine(
+            name = name,
+            exercise = exercise,
+            start = start,
+            goalPerSet = goalPerSet,
+            trainingDays = trainingDays,
+            startDate = LocalDate.now(),
+            order = routines().size
+        )
+        container.repository.addRoutine(routine)
+        _message.value = UiMessage("${name} 루틴을 만들었습니다 — ${routine.sessions.size}세션")
+    }
+
+    fun addCheckRoutine(name: String, trainingDays: List<Int>, note: String = "") {
+        val routine = PlanGenerator.checkRoutine(
+            name = name,
+            trainingDays = trainingDays,
+            startDate = LocalDate.now(),
+            order = routines().size,
+            note = note
+        )
+        container.repository.addRoutine(routine)
+        _message.value = UiMessage("${name} 루틴을 만들었습니다")
+    }
+
+    fun archiveRoutine(routineId: String) {
+        container.repository.archiveRoutine(routineId)
+        _message.value = UiMessage("루틴을 목록에서 뺐습니다. 기록은 남아 있습니다.")
+    }
+
+    fun moveRoutine(routineId: String, delta: Int) = container.repository.moveRoutine(routineId, delta)
+
+    fun setSyncRoutine(routineId: String?) {
+        container.repository.setSyncRoutine(routineId)
+        syncWithGoogleTasks()
+    }
+
+    /** 세트 입력은 루틴별로 따로 들고 있는다. */
+    private val _repsByRoutine = MutableStateFlow<Map<String, List<Int>>>(emptyMap())
+    val repsByRoutine: StateFlow<Map<String, List<Int>>> = _repsByRoutine.asStateFlow()
+
+    fun repsFor(routine: TrainingPlan): List<Int> =
+        _repsByRoutine.value[routine.id] ?: sessionOf(routine)?.targets.orEmpty()
+
+    fun setRepsFor(routine: TrainingPlan, index: Int, value: Int) {
+        val current = repsFor(routine).toMutableList()
+        if (index !in current.indices) return
+        current[index] = value.coerceIn(0, 999)
+        _repsByRoutine.value = _repsByRoutine.value + (routine.id to current)
+    }
+
+    fun clearRepsFor(routine: TrainingPlan) {
+        _repsByRoutine.value = _repsByRoutine.value + (routine.id to repsFor(routine).map { 0 })
+    }
+
+    /** 이 루틴의 오늘 세션을 기록한다. 실패/재도전 규칙은 기존과 같다. */
+    fun recordRoutine(routine: TrainingPlan) {
+        val session = sessionOf(routine) ?: return
+        val reps = repsFor(routine)
+        if (reps.isEmpty()) return
+        val sets = session.targets.mapIndexed { i, target -> SetEntry(target, reps.getOrElse(i) { 0 }) }
+
+        viewModelScope.launch {
+            withBusy {
+                val pending = data.value.pendingTask
+                val log = container.repository.recordSession(
+                    plan = routine,
+                    session = session,
+                    sets = sets,
+                    note = "",
+                    autoRegulate = settings.value.autoRegulate
+                )
+                _repsByRoutine.value = _repsByRoutine.value - routine.id
+                _message.value = if (log.failed) {
+                    UiMessage(
+                        "${routine.name} ${log.total}개 — 목표 ${log.targetTotal}개에 ${log.shortfall}개 부족. " +
+                            "같은 세션을 다시 합니다.",
+                        isError = true
+                    )
+                } else {
+                    UiMessage("${routine.name} ${log.total}개 기록 완료!")
+                }
+
+                // 할 일 연동은 지정된 루틴 하나만 따라간다.
+                if (routine.syncToTasks &&
+                    settings.value.autoSync &&
+                    googleStatus.value.signedIn &&
+                    settings.value.taskListId != null
+                ) {
+                    _syncing.value = true
+                    try {
+                        closePendingTask(pending, log)
+                        runCatching { ensurePendingTask() }
+                    } finally {
+                        _syncing.value = false
+                    }
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------ 워치(Health Connect)

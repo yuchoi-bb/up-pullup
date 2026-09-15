@@ -112,7 +112,7 @@ jobs:
         run: |
           NOTES_FILE=$(mktemp)
           {
-            echo "## 업풀업 ${{ steps.version.outputs.version }}"
+            echo "## MXM ${{ steps.version.outputs.version }}"
             echo ""
             echo "- 커밋: ${GITHUB_SHA:0:7}"
             echo "- 서명: ${{ steps.keystore.outputs.signed }}"
@@ -133,7 +133,7 @@ jobs:
             gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.apk.outputs.path }}" --clobber
           else
             gh release create "${{ steps.version.outputs.tag }}" "${{ steps.apk.outputs.path }}" \
-              --title "업풀업 ${{ steps.version.outputs.version }}" \
+              --title "MXM ${{ steps.version.outputs.version }}" \
               --notes-file "$NOTES_FILE" \
               --latest
           fi

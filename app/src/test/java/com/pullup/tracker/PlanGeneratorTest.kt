@@ -4,6 +4,7 @@ import com.pullup.tracker.data.DateUtils
 import com.pullup.tracker.data.PlanGenerator
 import com.pullup.tracker.data.SessionLog
 import com.pullup.tracker.data.SetEntry
+import com.pullup.tracker.data.TrainingPlan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -167,5 +168,73 @@ class FailureTest {
         assertEquals(0, attempts.sum())
         // 네 번째에 채우면 그제서야 한 칸
         assertEquals(1, attempts.sum() + PlanGenerator.advanceBy(26, 26, autoRegulate = true))
+    }
+}
+
+/** 루틴 생성은 전부 산술이다. AI를 부르지 않는다. */
+class RoutineTest {
+
+    @Test
+    fun `횟수형 루틴은 사다리로 목표까지 간다`() {
+        val routine = PlanGenerator.countedRoutine(
+            name = "푸시업",
+            exercise = "푸시업",
+            start = listOf(15, 12, 12, 10, 10),
+            goalPerSet = 30,
+            trainingDays = emptyList(),
+            startDate = LocalDate.of(2026, 9, 15),
+            order = 1
+        )
+        assertTrue(routine.isCounted)
+        assertEquals("5세트 × 30개 = 총 150개", routine.goal)
+        // 첫 세션은 지금 할 수 있는 개수 그대로
+        assertEquals(listOf(15, 12, 12, 10, 10), routine.sessions.first().targets)
+        // 마지막 세션은 전 세트가 목표치
+        assertEquals(List(5) { 30 }, routine.sessions.last().targets)
+        assertEquals(150, routine.goalTotal)
+    }
+
+    @Test
+    fun `체크형 루틴은 세션이 없다`() {
+        val routine = PlanGenerator.checkRoutine(
+            name = "견갑골 스트레칭",
+            trainingDays = listOf(1, 3, 5),
+            startDate = LocalDate.of(2026, 9, 15),
+            order = 2
+        )
+        assertTrue(routine.isCheck)
+        assertTrue(routine.sessions.isEmpty())
+        assertEquals(0, routine.goalTotal)
+    }
+
+    @Test
+    fun `요일을 안 고르면 매일로 본다`() {
+        val everyday = PlanGenerator.checkRoutine("안구 운동", emptyList(), LocalDate.now(), 0)
+        (1..7).forEach { assertTrue("$it 요일에도 해야 한다", everyday.runsOn(it)) }
+
+        val weekdays = PlanGenerator.checkRoutine("flow", listOf(1, 2, 3, 4, 5), LocalDate.now(), 0)
+        assertTrue(weekdays.runsOn(1))
+        assertTrue(!weekdays.runsOn(6))
+        assertTrue(!weekdays.runsOn(7))
+    }
+
+    @Test
+    fun `예전 JSON처럼 kind가 없으면 횟수형이 된다`() {
+        // 기존 "풀업 100 프로젝트"가 그대로 횟수형 루틴이 되는지.
+        val old = TrainingPlan(
+            id = "p", name = "풀업", exercise = "풀업", goal = "",
+            startDate = "2026-09-01", trainingDays = emptyList(),
+            sessions = PlanGenerator.ladder(listOf(6, 5, 5, 4, 4), 20),
+            createdAt = 0L
+        )
+        assertTrue(old.isCounted)
+        assertEquals(0, old.order)
+        assertTrue(!old.archived)
+    }
+
+    @Test
+    fun `목표에 이미 도달했으면 세션이 하나뿐이다`() {
+        val sessions = PlanGenerator.ladder(listOf(20, 20, 20), goalPerSet = 20)
+        assertEquals(1, sessions.size)
     }
 }

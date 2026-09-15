@@ -23,7 +23,11 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,6 +63,7 @@ import androidx.core.content.FileProvider
 import com.pullup.tracker.BuildConfig
 import com.pullup.tracker.ai.GeminiClient
 import com.pullup.tracker.data.DateUtils
+import com.pullup.tracker.data.PlanGenerator
 import com.pullup.tracker.google.AppSigningInfo
 import com.pullup.tracker.ui.KeyCheck
 import com.pullup.tracker.ui.MainViewModel
@@ -279,6 +284,66 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        // ------------------------------------------------------- 루틴 관리
+        item {
+            val routines = viewModel.routines()
+            SectionCard(
+                title = "루틴 관리",
+                trailing = {
+                    Text("${routines.size}개", style = MaterialTheme.typography.labelMedium)
+                }
+            ) {
+                if (routines.isEmpty()) {
+                    Text(
+                        "아직 루틴이 없습니다. 아래에서 추가해 주세요.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                routines.forEachIndexed { index, routine ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(routine.name, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                (if (routine.isCheck) "체크형" else "횟수형 · ${routine.sessions.size}세션") +
+                                    " · " + (
+                                        if (routine.trainingDays.isEmpty()) {
+                                            "매일"
+                                        } else {
+                                            routine.trainingDays.sorted()
+                                                .joinToString("") { DateUtils.dayNameOf(it) }
+                                        }
+                                        ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (routine.isCounted) {
+                            // Google 할 일에는 한 번에 하나만 올린다.
+                            TextButton(onClick = { viewModel.setSyncRoutine(routine.id) }) {
+                                Text(if (routine.syncToTasks) "할 일 ✓" else "할 일로")
+                            }
+                        }
+                        IconButton(
+                            onClick = { viewModel.moveRoutine(routine.id, -1) },
+                            enabled = index > 0
+                        ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "위로") }
+                        IconButton(
+                            onClick = { viewModel.moveRoutine(routine.id, 1) },
+                            enabled = index < routines.lastIndex
+                        ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "아래로") }
+                        IconButton(onClick = { viewModel.archiveRoutine(routine.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "목록에서 빼기")
+                        }
+                    }
+                    if (index != routines.lastIndex) Spacer(Modifier.height(6.dp))
+                }
+
+                Spacer(Modifier.height(12.dp))
+                AddRoutineBlock(viewModel)
             }
         }
 
@@ -682,5 +747,144 @@ private fun TaskListPicker(
         } else {
             SimpleDropdown(label = "선택된 목록", options = options, selected = selected, onSelect = onSelect)
         }
+    }
+}
+
+/**
+ * 루틴 추가. 프리셋을 고르면 시작 개수와 목표가 채워지고, 거기서 손으로 고친다.
+ * 일정은 전부 산술(사다리) 계산이고 AI를 쓰지 않는다.
+ */
+@Composable
+private fun AddRoutineBlock(viewModel: MainViewModel) {
+    var open by remember { mutableStateOf(false) }
+    var counted by remember { mutableStateOf(true) }
+    var name by remember { mutableStateOf("") }
+    var startText by remember { mutableStateOf("") }
+    var goalPerSet by remember { mutableStateOf(20) }
+    var days by remember { mutableStateOf(emptyList<Int>()) }
+
+    if (!open) {
+        FilledTonalButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("루틴 추가")
+        }
+        return
+    }
+
+    Row {
+        FilterChip(selected = counted, onClick = { counted = true }, label = { Text("횟수형") })
+        Spacer(Modifier.width(8.dp))
+        FilterChip(selected = !counted, onClick = { counted = false }, label = { Text("체크형") })
+    }
+    Spacer(Modifier.height(10.dp))
+
+    if (counted) {
+        Text("프리셋", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(6.dp))
+        Column {
+            PlanGenerator.PRESETS.chunked(3).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    row.forEach { preset ->
+                        FilterChip(
+                            selected = name == preset.name,
+                            onClick = {
+                                name = preset.name
+                                startText = preset.suggestedStart.joinToString("/")
+                                goalPerSet = preset.suggestedGoalPerSet
+                            },
+                            label = { Text(preset.name) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+    }
+
+    OutlinedTextField(
+        value = name,
+        onValueChange = { name = it },
+        label = { Text(if (counted) "루틴 이름" else "루틴 이름 (예: 견갑골 스트레칭)") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true
+    )
+
+    if (counted) {
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = startText,
+            onValueChange = { startText = it },
+            label = { Text("지금 할 수 있는 개수") },
+            supportingText = { Text("세트마다 / 로 구분. 예: 6/5/5/4/4") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("세트당 목표", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { goalPerSet = (goalPerSet - 1).coerceAtLeast(1) }) {
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "줄이기")
+            }
+            Text("$goalPerSet", style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = { goalPerSet = (goalPerSet + 1).coerceAtMost(999) }) {
+                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "늘리기")
+            }
+        }
+    }
+
+    Spacer(Modifier.height(10.dp))
+    Text("하는 요일 (안 고르면 매일)", style = MaterialTheme.typography.labelLarge)
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        (1..7).forEach { day ->
+            FilterChip(
+                selected = days.contains(day),
+                onClick = { days = if (days.contains(day)) days - day else days + day },
+                label = { Text(DateUtils.dayNameOf(day)) }
+            )
+        }
+    }
+
+    // 미리보기: 몇 세션이 나오는지 바로 보여 준다.
+    val startSets = remember(startText) {
+        startText.split("/", ",", " ").mapNotNull { it.trim().toIntOrNull() }.filter { it > 0 }
+    }
+    if (counted && startSets.isNotEmpty()) {
+        val preview = remember(startSets, goalPerSet) {
+            PlanGenerator.ladder(startSets, goalPerSet)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "${startSets.size}세트 · 목표 ${startSets.size * goalPerSet}개 · " +
+                "${preview.size}세션이면 도달합니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Row {
+        TextButton(onClick = { open = false }) { Text("취소") }
+        Spacer(Modifier.weight(1f))
+        Button(
+            onClick = {
+                if (counted) {
+                    viewModel.addCountedRoutine(
+                        name = name.trim(),
+                        exercise = name.trim(),
+                        start = startSets,
+                        goalPerSet = goalPerSet,
+                        trainingDays = days.sorted()
+                    )
+                } else {
+                    viewModel.addCheckRoutine(name = name.trim(), trainingDays = days.sorted())
+                }
+                open = false
+                name = ""
+                startText = ""
+                days = emptyList()
+            },
+            enabled = name.isNotBlank() && (!counted || startSets.isNotEmpty())
+        ) { Text("만들기") }
     }
 }

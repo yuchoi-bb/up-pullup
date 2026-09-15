@@ -20,7 +20,12 @@ data class PlanSession(
     }
 }
 
-/** 운동 종목 하나에 대한 전체 로드맵. */
+/**
+ * 루틴 하나. 개수를 세는 운동일 수도, 그냥 했는지만 체크하는 습관일 수도 있다.
+ *
+ * 필드를 덧붙이기만 했기 때문에 예전에 저장된 JSON도 그대로 읽힌다.
+ * 기존 "풀업 100 프로젝트"는 기본값을 받아 횟수형 루틴이 된다.
+ */
 @Serializable
 data class TrainingPlan(
     val id: String,
@@ -31,14 +36,30 @@ data class TrainingPlan(
     val trainingDays: List<Int>,
     val sessions: List<PlanSession>,
     val createdAt: Long,
-    val source: String = SOURCE_BUILTIN
+    val source: String = SOURCE_BUILTIN,
+    /** [KIND_COUNTED] 면 세트·개수를 세고, [KIND_CHECK] 면 했는지만 본다. */
+    val kind: String = KIND_COUNTED,
+    /** 오늘 화면에 뜨는 순서. 작을수록 위. */
+    val order: Int = 0,
+    /** 목록에서 감춘다. 기록은 남는다. */
+    val archived: Boolean = false,
+    /** Google 할 일에 "다음에 할 것"으로 올릴 루틴인지. 하나만 켤 수 있다. */
+    val syncToTasks: Boolean = false
 ) {
     val goalTotal: Int get() = sessions.lastOrNull()?.total ?: 0
+    val isCheck: Boolean get() = kind == KIND_CHECK
+    val isCounted: Boolean get() = !isCheck
+
+    /** 이 요일에 하기로 한 루틴인지. 비어 있으면 매일. */
+    fun runsOn(day: Int): Boolean = trainingDays.isEmpty() || trainingDays.contains(day)
 
     companion object {
         const val SOURCE_BUILTIN = "builtin"
         const val SOURCE_GEMINI = "gemini"
         const val SOURCE_MANUAL = "manual"
+
+        const val KIND_COUNTED = "counted"
+        const val KIND_CHECK = "check"
     }
 }
 

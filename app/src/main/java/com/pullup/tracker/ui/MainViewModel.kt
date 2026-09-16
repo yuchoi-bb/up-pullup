@@ -540,6 +540,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .replace("{date}", log.date)
         .replace("{session}", log.sessionIndex.toString())
 
+    /**
+     * 기록의 세트 개수를 고친다. 잘못 눌러 들어간 숫자를 되돌리는 용도.
+     * 성공/실패가 뒤집히면 플랜 진행도 같이 맞춰진다.
+     */
+    fun updateLogReps(logId: String, reps: List<Int>) {
+        val log = data.value.logs.firstOrNull { it.id == logId } ?: return
+        val sets = log.sets.mapIndexed { i, entry ->
+            entry.copy(done = reps.getOrElse(i) { entry.done }.coerceIn(0, 999))
+        }
+        container.repository.updateLogSets(logId, sets, settings.value.autoRegulate)
+        val total = sets.sumOf { it.done }
+        val target = sets.sumOf { it.target }
+        _message.value = if (total < target) {
+            UiMessage("${total}개로 고쳤습니다 — 목표 ${target}개에 ${target - total}개 부족(실패).", isError = true)
+        } else {
+            UiMessage("${total}개로 고쳤습니다.")
+        }
+    }
+
     /** 기록 날짜를 옮긴다(몰아서 입력한 걸 실제 날짜로 되돌릴 때). */
     fun changeLogDate(logId: String, newDate: LocalDate) {
         val log = data.value.logs.firstOrNull { it.id == logId } ?: return

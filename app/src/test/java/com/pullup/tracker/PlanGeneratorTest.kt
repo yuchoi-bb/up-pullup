@@ -233,6 +233,23 @@ class RoutineTest {
     }
 
     @Test
+    fun `기록을 고치면 전진 칸수도 따라 바뀐다`() {
+        // 54개 목표에 실수로 10개를 넣은 상황: 실패라 제자리(0칸)
+        val wrong = PlanGenerator.advanceBy(done = 10, target = 54, autoRegulate = true)
+        assertEquals(0, wrong)
+
+        // 실제로 한 54개로 고치면 한 칸 전진한다. 진행 위치는 advanceBy의 합이라
+        // 이 값만 맞으면 재도전 표시도 같이 풀린다.
+        val fixed = PlanGenerator.advanceBy(done = 54, target = 54, autoRegulate = true)
+        assertEquals(1, fixed)
+    }
+
+    @Test
+    fun `고친 개수가 여전히 모자라면 실패로 남는다`() {
+        assertEquals(0, PlanGenerator.advanceBy(done = 53, target = 54, autoRegulate = true))
+    }
+
+    @Test
     fun `목표에 이미 도달했으면 세션이 하나뿐이다`() {
         val sessions = PlanGenerator.ladder(listOf(20, 20, 20), goalPerSet = 20)
         assertEquals(1, sessions.size)

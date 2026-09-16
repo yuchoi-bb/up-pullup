@@ -98,6 +98,10 @@ data class SessionLog(
      * 여기서 실패로 잡히지 않는다(개수가 달랐다면 앱에서 다시 넣으면 된다).
      */
     val failed: Boolean get() = total < targetTotal
+
+    /** 체크형 루틴의 기록인지. 개수 개념이 없어서 세트 편집을 띄우지 않는다. */
+    val isCheckLog: Boolean
+        get() = sessionIndex == 0 && sets.size == 1 && sets.first().target <= 1
     val shortfall: Int get() = (targetTotal - total).coerceAtLeast(0)
     val repsText: String get() = sets.joinToString("/") { it.done.toString() }
     val fromTasks: Boolean get() = source == SOURCE_TASKS

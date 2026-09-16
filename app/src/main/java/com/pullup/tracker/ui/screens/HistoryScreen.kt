@@ -2,6 +2,8 @@
 
 package com.pullup.tracker.ui.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -17,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
@@ -280,16 +284,74 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
         var draft by remember(editTarget.id) {
             mutableStateOf(runCatching { LocalDate.parse(editTarget.date) }.getOrDefault(LocalDate.now()))
         }
+        var reps by remember(editTarget.id) { mutableStateOf(editTarget.sets.map { it.done }) }
+        val editedTotal = reps.sum()
+
         AlertDialog(
             onDismissRequest = { editing = null },
-            title = { Text("날짜 바꾸기") },
+            title = { Text("기록 수정") },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "${editTarget.exercise} ${editTarget.repsText} (총 ${editTarget.total}개)",
+                        "${editTarget.exercise} · 목표 ${editTarget.targetTotal}개",
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Spacer(Modifier.height(14.dp))
+
+                    // 잘못 눌러 들어간 숫자를 여기서 바로 고친다.
+                    if (!editTarget.isCheckLog) {
+                        Spacer(Modifier.height(12.dp))
+                        editTarget.sets.forEachIndexed { index, entry ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${index + 1}세트",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.width(56.dp)
+                                )
+                                Text(
+                                    "목표 ${entry.target}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(56.dp)
+                                )
+                                Spacer(Modifier.weight(1f))
+                                IconButton(onClick = {
+                                    reps = reps.toMutableList().also {
+                                        it[index] = (it[index] - 1).coerceAtLeast(0)
+                                    }
+                                }) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "줄이기") }
+                                Text(
+                                    "${reps.getOrElse(index) { 0 }}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.width(40.dp),
+                                    textAlign = TextAlign.Center
+                                )
+                                IconButton(onClick = {
+                                    reps = reps.toMutableList().also {
+                                        it[index] = (it[index] + 1).coerceAtMost(999)
+                                    }
+                                }) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "늘리기") }
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "합계 ${editedTotal}개" +
+                                if (editedTotal < editTarget.targetTotal) {
+                                    " — ${editTarget.targetTotal - editedTotal}개 부족(실패로 남습니다)"
+                                } else {
+                                    " — 목표 달성"
+                                },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (editedTotal < editTarget.targetTotal) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
+                        )
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    Text("날짜", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         OutlinedButton(onClick = { draft = draft.minusDays(1) }) { Text("← 하루 전") }
                         Text(
@@ -312,7 +374,14 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.changeLogDate(editTarget.id, draft)
+                    // 개수를 먼저 고쳐야 한다. 날짜 이동이 같은 기록을 다시 쓰기 때문에
+                    // 순서가 반대면 개수 변경이 덮어써진다.
+                    if (!editTarget.isCheckLog && reps != editTarget.sets.map { it.done }) {
+                        viewModel.updateLogReps(editTarget.id, reps)
+                    }
+                    if (draft.toString() != editTarget.date) {
+                        viewModel.changeLogDate(editTarget.id, draft)
+                    }
                     editing = null
                 }) { Text("저장") }
             },

@@ -263,6 +263,32 @@ class AppRepository(private val context: Context) {
         d.copy(logs = d.logs.map { if (it.id == log.id) log else it })
     }
 
+    /**
+     * 기록의 세트 개수를 고친다.
+     *
+     * 전진 칸수(advanceBy)도 다시 계산한다. 개수를 고치면 성공/실패가 뒤집힐 수
+     * 있는데, 그대로 두면 잘못 넣은 기록을 고쳐도 플랜 진행은 어긋난 채로 남는다.
+     * 진행 위치는 advanceBy의 합이라 이 값만 맞으면 재도전도 같이 풀린다.
+     */
+    fun updateLogSets(logId: String, sets: List<SetEntry>, autoRegulate: Boolean) = mutate { d ->
+        d.copy(
+            logs = d.logs.map { log ->
+                if (log.id != logId) {
+                    log
+                } else {
+                    log.copy(
+                        sets = sets,
+                        advanceBy = PlanGenerator.advanceBy(
+                            done = sets.sumOf { it.done },
+                            target = sets.sumOf { it.target },
+                            autoRegulate = autoRegulate
+                        )
+                    )
+                }
+            }
+        )
+    }
+
     fun attachTask(logId: String, taskId: String?, listId: String?, listTitle: String?, error: String?) =
         mutate { d ->
             d.copy(logs = d.logs.map {

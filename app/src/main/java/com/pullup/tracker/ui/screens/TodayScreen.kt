@@ -70,8 +70,13 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val busy by viewModel.busy.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
-    // 루틴별 입력값. 이 flow가 바뀌어야 카드가 다시 그려진다.
+    // 루틴별 입력값/체크. 카드에 이 map에서 꺼낸 값을 넘겨야 Compose가 읽은 것으로
+    // 쳐서 다시 그린다. viewModel.repsFor()를 바로 부르면 StateFlow의 .value를 읽는
+    // 것이라 값은 바뀌어도 화면이 그대로다(+/- 가 안 먹던 이유).
     val repsByRoutine by viewModel.repsByRoutine.collectAsState()
+    val setDoneByRoutine by viewModel.setDoneByRoutine.collectAsState()
+    val rest by viewModel.restRemaining.collectAsState()
+    val restRoutineId by viewModel.restRoutineId.collectAsState()
 
     val plan = viewModel.plan
     val stats = viewModel.stats()
@@ -153,15 +158,23 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     onToggle = { viewModel.toggleCheckRoutine(routine) }
                 )
             } else {
+                val session = viewModel.sessionOf(routine)
                 CountedRoutineCard(
                     routine = routine,
-                    session = viewModel.sessionOf(routine),
+                    session = session,
                     position = viewModel.positionOf(routine),
-                    reps = viewModel.repsFor(routine),
+                    reps = repsByRoutine[routine.id] ?: session?.targets.orEmpty(),
+                    setDone = setDoneByRoutine[routine.id]
+                        ?: List(session?.targets?.size ?: 0) { false },
                     doneToday = viewModel.didToday(routine),
                     retry = viewModel.retryStateOf(routine),
                     busy = busy,
+                    restSeconds = if (restRoutineId == routine.id) rest else 0,
+                    restTotal = settings.restSeconds,
                     onReps = { index, value -> viewModel.setRepsFor(routine, index, value) },
+                    onToggleSet = { index -> viewModel.toggleSetFor(routine, index) },
+                    onSkipRest = viewModel::stopRest,
+                    onRestartRest = { viewModel.startRest() },
                     onClear = { viewModel.clearRepsFor(routine) },
                     onRecord = { viewModel.recordRoutine(routine) }
                 )
@@ -342,11 +355,17 @@ private fun SetRow(
     index: Int,
     target: Int,
     value: Int,
-    onValue: (Int) -> Unit
+    done: Boolean,
+    onValue: (Int) -> Unit,
+    onToggle: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant
+        color = if (done) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        }
     ) {
         Row(
             modifier = Modifier
@@ -375,6 +394,18 @@ private fun SetRow(
             IconButton(onClick = { onValue(value + 1) }) {
                 Icon(Icons.Default.KeyboardArrowUp, contentDescription = "하나 늘리기", modifier = Modifier.size(22.dp))
             }
+            Spacer(Modifier.width(4.dp))
+            IconButton(onClick = onToggle) {
+                Icon(
+                    if (done) Icons.Default.CheckCircle else Icons.Default.Check,
+                    contentDescription = "세트 완료",
+                    tint = if (done) {
+                        MaterialTheme.colorScheme.secondary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
         }
     }
 }
@@ -391,10 +422,16 @@ private fun CountedRoutineCard(
     session: PlanSession?,
     position: Int,
     reps: List<Int>,
+    setDone: List<Boolean>,
     doneToday: Boolean,
     retry: RetryState?,
     busy: Boolean,
+    restSeconds: Int,
+    restTotal: Int,
     onReps: (Int, Int) -> Unit,
+    onToggleSet: (Int) -> Unit,
+    onSkipRest: () -> Unit,
+    onRestartRest: () -> Unit,
     onClear: () -> Unit,
     onRecord: () -> Unit
 ) {
@@ -482,9 +519,22 @@ private fun CountedRoutineCard(
                 index = index,
                 target = target,
                 value = reps.getOrElse(index) { target },
-                onValue = { onReps(index, it) }
+                done = setDone.getOrElse(index) { false },
+                onValue = { onReps(index, it) },
+                onToggle = { onToggleSet(index) }
             )
             if (index != session.targets.lastIndex) Spacer(Modifier.height(8.dp))
+        }
+
+        // 세트를 체크하면 여기에 휴식 타이머가 뜬다.
+        if (restSeconds > 0) {
+            Spacer(Modifier.height(12.dp))
+            RestBlock(
+                remaining = restSeconds,
+                total = restTotal,
+                onSkip = onSkipRest,
+                onRestart = onRestartRest
+            )
         }
 
         Spacer(Modifier.height(10.dp))
@@ -561,6 +611,39 @@ private fun CheckRoutineCard(
                     Text("체크")
                 }
             }
+        }
+    }
+}
+
+/** 세트 사이 휴식. 예전 "휴식" 카드를 루틴 카드 안으로 옮긴 것. */
+@Composable
+private fun RestBlock(remaining: Int, total: Int, onSkip: () -> Unit, onRestart: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("휴식", style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    String.format("%d:%02d", remaining / 60, remaining % 60),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onRestart) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("다시")
+                }
+                TextButton(onClick = onSkip) { Text("건너뛰기") }
+            }
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { if (total <= 0) 0f else remaining.toFloat() / total },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

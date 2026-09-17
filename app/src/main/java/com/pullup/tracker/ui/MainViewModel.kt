@@ -1067,6 +1067,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _repsByRoutine = MutableStateFlow<Map<String, List<Int>>>(emptyMap())
     val repsByRoutine: StateFlow<Map<String, List<Int>>> = _repsByRoutine.asStateFlow()
 
+    /** 루틴별 세트 완료 체크. */
+    private val _setDoneByRoutine = MutableStateFlow<Map<String, List<Boolean>>>(emptyMap())
+    val setDoneByRoutine: StateFlow<Map<String, List<Boolean>>> = _setDoneByRoutine.asStateFlow()
+
+    /** 지금 휴식 타이머가 붙어 있는 루틴. 카드 한 곳에만 띄우려고 들고 있는다. */
+    private val _restRoutineId = MutableStateFlow<String?>(null)
+    val restRoutineId: StateFlow<String?> = _restRoutineId.asStateFlow()
+
+    fun doneFor(routine: TrainingPlan): List<Boolean> =
+        _setDoneByRoutine.value[routine.id]
+            ?: List(sessionOf(routine)?.targets?.size ?: 0) { false }
+
+    /** 세트 완료 체크. 아직 남은 세트가 있으면 휴식 타이머를 건다. */
+    fun toggleSetFor(routine: TrainingPlan, index: Int) {
+        val list = doneFor(routine).toMutableList()
+        if (index !in list.indices) return
+        val nowDone = !list[index]
+        list[index] = nowDone
+        _setDoneByRoutine.value = _setDoneByRoutine.value + (routine.id to list)
+
+        if (nowDone && list.any { !it }) {
+            _restRoutineId.value = routine.id
+            startRest()
+        } else if (!nowDone) {
+            stopRest()
+            _restRoutineId.value = null
+        }
+    }
+
     fun repsFor(routine: TrainingPlan): List<Int> =
         _repsByRoutine.value[routine.id] ?: sessionOf(routine)?.targets.orEmpty()
 
@@ -1079,6 +1108,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearRepsFor(routine: TrainingPlan) {
         _repsByRoutine.value = _repsByRoutine.value + (routine.id to repsFor(routine).map { 0 })
+        _setDoneByRoutine.value = _setDoneByRoutine.value + (routine.id to doneFor(routine).map { false })
+        stopRest()
+        _restRoutineId.value = null
     }
 
     /** 이 루틴의 오늘 세션을 기록한다. 실패/재도전 규칙은 기존과 같다. */
@@ -1099,6 +1131,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     autoRegulate = settings.value.autoRegulate
                 )
                 _repsByRoutine.value = _repsByRoutine.value - routine.id
+                _setDoneByRoutine.value = _setDoneByRoutine.value - routine.id
+                stopRest()
+                _restRoutineId.value = null
                 _message.value = if (log.failed) {
                     UiMessage(
                         "${routine.name} ${log.total}개 — 목표 ${log.targetTotal}개에 ${log.shortfall}개 부족. " +

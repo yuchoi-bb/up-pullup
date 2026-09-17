@@ -1252,7 +1252,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val done = sessionPosition(data)
 
         if (sessionIndex <= done) {
-            val actual = data.value.logs
+            val actual = data.logs
                 .filter { it.planId == currentPlan.id && it.sessionIndex == sessionIndex }
                 .maxByOrNull { it.recordedAt }
                 ?.let { runCatching { LocalDate.parse(it.date) }.getOrNull() }

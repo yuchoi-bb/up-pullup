@@ -58,6 +58,14 @@ kotlin stdlib(`List`, `String`, `IllegalStateException`, `OptIn`…)과 확장 �
 `collectAsState()`로 받은 값을 넘길 수밖에 없어서 실수가 안 난다.
 새 조회 함수를 만들 때도 이 규칙을 지킬 것 — 안에서 `data.value`를 읽지 않는다.
 
+**함정:** 파라미터 이름 `data`가 ViewModel의 `data` StateFlow를 가린다. 그 함수 안에
+`data.value`가 남아 있으면 `AppData.value`를 찾다가 컴파일이 깨진다. 로컬 kotlinc는
+이걸 `unresolved reference` 더미에 묻어 버리니 아래로 따로 본다.
+
+```bash
+grep -rn "data\.value" app/src/main/java/com/pullup/tracker/ui/screens/   # 화면에는 하나도 없어야 한다
+```
+
 화면을 고쳤으면 확인:
 
 ```bash

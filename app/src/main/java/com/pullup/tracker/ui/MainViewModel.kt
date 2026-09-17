@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.pullup.tracker.PullupApplication
 import com.pullup.tracker.ai.CoachPrompts
 import com.pullup.tracker.ai.GeneratedPlan
+import com.pullup.tracker.data.AppData
 import com.pullup.tracker.data.AppSettings
 import com.pullup.tracker.data.DateUtils
 import com.pullup.tracker.data.PendingTask
@@ -155,14 +156,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 루틴이 여러 개가 됐지만 Google 할 일에는 한 번에 하나만 올린다(플랜이
      * 날짜가 아니라 완료 횟수로 진행하기 때문). 지정이 없으면 첫 번째 횟수형 루틴.
      */
-    val plan: TrainingPlan? get() =
-        container.repository.syncRoutine(data.value)
-            ?: container.repository.routines(data.value).firstOrNull { it.isCounted }
-            ?: container.repository.planOf(data.value)
+    val plan: TrainingPlan? get() = primaryRoutine(data.value)
 
-    fun currentSession(): PlanSession? = container.repository.currentSession(data.value, plan)
+    /** 화면에서 쓰는 쪽. AppData를 받아야 Compose가 상태를 읽은 것으로 친다. */
+    fun primaryRoutine(data: AppData): TrainingPlan? =
+        container.repository.syncRoutine(data)
+            ?: container.repository.routines(data).firstOrNull { it.isCounted }
+            ?: container.repository.planOf(data)
 
-    fun sessionPosition(): Int = container.repository.currentSessionPosition(data.value, plan)
+    fun currentSession(data: AppData): PlanSession? =
+        container.repository.currentSession(data, primaryRoutine(data))
+
+    fun sessionPosition(data: AppData): Int =
+        container.repository.currentSessionPosition(data, primaryRoutine(data))
 
     fun lastLog(): SessionLog? = data.value.logs.maxByOrNull { it.recordedAt }
 
@@ -173,7 +179,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 목표 세션이 바뀌면 입력값을 목표치로 초기화한다. */
     fun prepareInputs(session: PlanSession?) {
-        val key = "${plan?.id}#${session?.index}#${sessionPosition()}"
+        val key = "${plan?.id}#${session?.index}#${sessionPosition(data.value)}"
         if (key == loadedSessionKey) return
         loadedSessionKey = key
         _repsInput.value = session?.targets.orEmpty()
@@ -226,7 +232,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 세션을 기록하고, 설정에 따라 Google Tasks에 완료 항목으로 올린다. */
     fun completeSession() {
         val currentPlan = plan ?: return
-        val session = currentSession() ?: return
+        val session = currentSession(data.value) ?: return
         val reps = _repsInput.value
         if (reps.isEmpty()) return
         val sets = session.targets.mapIndexed { i, target -> SetEntry(target, reps.getOrElse(i) { 0 }) }
@@ -361,7 +367,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!remote.completed) return
 
         val currentPlan = plan ?: return
-        val session = currentSession() ?: return
+        val session = currentSession(data.value) ?: return
         if (session.index != pending.sessionIndex) {  // 그새 플랜이 바뀜
             container.repository.setPendingTask(null)
             return
@@ -414,7 +420,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun ensurePendingTask() {
         val listId = settings.value.taskListId ?: return
         val currentPlan = plan ?: return
-        val session = currentSession() ?: return
+        val session = currentSession(data.value) ?: return
         val snapshot = data.value
         val position = container.repository.currentSessionPosition(snapshot, currentPlan)
         val due = nextDueDate()
@@ -834,7 +840,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     model = settings.value.geminiModel,
                     prompt = CoachPrompts.coachPrompt(
                         plan = plan,
-                        next = currentSession(),
+                        next = currentSession(data.value),
                         recentLogs = data.value.logs.sortedByDescending { it.date },
                         question = question
                     ),
@@ -969,18 +975,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 아직 한 번도 시도 안 한 세션이면 null.
      */
     /** 이 루틴이 지금 재도전 중인지. 아직 한 번도 실패 안 했으면 null. */
-    fun retryStateOf(routine: TrainingPlan): RetryState? {
-        val session = sessionOf(routine) ?: return null
-        val snapshot = data.value
-        val failures = container.repository.failedAttempts(snapshot, routine.id, session.index)
+    fun retryStateOf(data: AppData, routine: TrainingPlan): RetryState? {
+        val session = container.repository.currentSession(data, routine) ?: return null
+        val failures = container.repository.failedAttempts(data, routine.id, session.index)
         if (failures.isEmpty()) return null
-        val attempt = container.repository.attemptsOf(snapshot, routine.id, session.index) + 1
+        val attempt = container.repository.attemptsOf(data, routine.id, session.index) + 1
         return RetryState(attempt = attempt, failures = failures)
     }
 
     fun retryState(): RetryState? {
         val currentPlan = plan ?: return null
-        val session = currentSession() ?: return null
+        val session = currentSession(data.value) ?: return null
         val snapshot = data.value
         val failures = container.repository.failedAttempts(snapshot, currentPlan.id, session.index)
         if (failures.isEmpty()) return null
@@ -990,23 +995,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ------------------------------------------------------------ 루틴 (여러 개)
 
-    fun routines(): List<TrainingPlan> = container.repository.routines(data.value)
+    /*
+     * 아래 조회 함수들은 AppData를 인자로 받는다.
+     *
+     * 예전에는 data.value를 안에서 읽었는데, 그러면 화면이 Compose 상태를 읽은 게
+     * 아니라서 값이 바뀌어도 다시 그려지지 않았다. 루틴을 추가해도 목록이 그대로고
+     * 세트 +/- 도 안 먹던 게 전부 이것 때문이다. 인자로 받으면 호출하는 쪽이
+     * collectAsState()로 받은 값을 넘길 수밖에 없어서 같은 실수가 안 난다.
+     */
 
-    fun sessionOf(routine: TrainingPlan): PlanSession? =
-        container.repository.currentSession(data.value, routine)
+    fun routines(data: AppData): List<TrainingPlan> = container.repository.routines(data)
 
-    fun positionOf(routine: TrainingPlan): Int =
-        container.repository.currentSessionPosition(data.value, routine)
+    fun sessionOf(data: AppData, routine: TrainingPlan): PlanSession? =
+        container.repository.currentSession(data, routine)
 
-    fun didToday(routine: TrainingPlan): Boolean =
-        container.repository.didRoutineOn(data.value, routine.id, LocalDate.now())
+    fun positionOf(data: AppData, routine: TrainingPlan): Int =
+        container.repository.currentSessionPosition(data, routine)
 
-    fun completedCountsByDay(): Map<LocalDate, Int> =
-        container.repository.completedCountsByDay(data.value)
+    fun didToday(data: AppData, routine: TrainingPlan): Boolean =
+        container.repository.didRoutineOn(data, routine.id, LocalDate.now())
+
+    fun completedCountsByDay(data: AppData): Map<LocalDate, Int> =
+        container.repository.completedCountsByDay(data)
 
     /** 루틴마다 요일이 달라서, 하나라도 예정인 요일을 모아 준다. 비면 매일로 본다. */
-    fun anyTrainingDays(): Set<Int> {
-        val all = routines()
+    fun anyTrainingDays(data: AppData): Set<Int> {
+        val all = routines(data)
         if (all.isEmpty() || all.any { it.trainingDays.isEmpty() }) return emptySet()
         return all.flatMap { it.trainingDays }.toSet()
     }
@@ -1033,7 +1047,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             goalPerSet = goalPerSet,
             trainingDays = trainingDays,
             startDate = LocalDate.now(),
-            order = routines().size
+            order = routines(data.value).size
         )
         container.repository.addRoutine(routine)
         _message.value = UiMessage("${name} 루틴을 만들었습니다 — ${routine.sessions.size}세션")
@@ -1044,7 +1058,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             name = name,
             trainingDays = trainingDays,
             startDate = LocalDate.now(),
-            order = routines().size,
+            order = routines(data.value).size,
             note = note
         )
         container.repository.addRoutine(routine)
@@ -1077,7 +1091,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun doneFor(routine: TrainingPlan): List<Boolean> =
         _setDoneByRoutine.value[routine.id]
-            ?: List(sessionOf(routine)?.targets?.size ?: 0) { false }
+            ?: List(sessionOf(data.value, routine)?.targets?.size ?: 0) { false }
 
     /** 세트 완료 체크. 아직 남은 세트가 있으면 휴식 타이머를 건다. */
     fun toggleSetFor(routine: TrainingPlan, index: Int) {
@@ -1097,7 +1111,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun repsFor(routine: TrainingPlan): List<Int> =
-        _repsByRoutine.value[routine.id] ?: sessionOf(routine)?.targets.orEmpty()
+        _repsByRoutine.value[routine.id] ?: sessionOf(data.value, routine)?.targets.orEmpty()
 
     fun setRepsFor(routine: TrainingPlan, index: Int, value: Int) {
         val current = repsFor(routine).toMutableList()
@@ -1115,7 +1129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 이 루틴의 오늘 세션을 기록한다. 실패/재도전 규칙은 기존과 같다. */
     fun recordRoutine(routine: TrainingPlan) {
-        val session = sessionOf(routine) ?: return
+        val session = sessionOf(data.value, routine) ?: return
         val reps = repsFor(routine)
         if (reps.isEmpty()) return
         val sets = session.targets.mapIndexed { i, target -> SetEntry(target, reps.getOrElse(i) { 0 }) }
@@ -1225,7 +1239,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _message.value = null
     }
 
-    fun stats() = container.repository.stats(data.value)
+    fun stats(data: AppData) = container.repository.stats(data)
 
     /**
      * 플랜 화면에 보여줄 세션 날짜.
@@ -1233,9 +1247,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 이미 끝낸 세션은 실제로 한 날짜를 그대로 쓴다(예보로 덮어쓰지 않는다).
      * 앞으로 할 세션은 다음 할 일 기한부터 하루에 하나씩 잡는다.
      */
-    fun projectedDate(sessionIndex: Int): LocalDate {
-        val currentPlan = plan ?: return LocalDate.now()
-        val done = sessionPosition()
+    fun projectedDate(data: AppData, sessionIndex: Int): LocalDate {
+        val currentPlan = primaryRoutine(data) ?: return LocalDate.now()
+        val done = sessionPosition(data)
 
         if (sessionIndex <= done) {
             val actual = data.value.logs

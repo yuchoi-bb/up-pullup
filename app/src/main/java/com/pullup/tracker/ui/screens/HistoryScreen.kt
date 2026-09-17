@@ -68,7 +68,7 @@ private val YearMonthSaver = androidx.compose.runtime.saveable.Saver<YearMonth, 
 @Composable
 fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val data by viewModel.data.collectAsState()
-    val stats = viewModel.stats()
+    val stats = viewModel.stats(data)
     var sortBy by rememberSaveable { mutableStateOf(HistorySort.DATE) }
     // 같은 날짜가 여러 건이면 세션 순서를 2차 기준으로 써서 순서가 뒤죽박죽이 되지 않게 한다.
     val logs = remember(data.logs, sortBy) {
@@ -96,7 +96,7 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     }
 
     // 달력 동그라미용: 날짜별로 그날 끝낸 **루틴 수**
-    val doneCounts = remember(data.logs) { viewModel.completedCountsByDay() }
+    val doneCounts = remember(data.logs) { viewModel.completedCountsByDay(data) }
 
     // 차트는 정렬과 무관하게 항상 시간순(오래된 것 -> 최근)
     val chartLogs = remember(data.logs) {
@@ -158,7 +158,7 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     month = month,
                     doneCounts = doneCounts,
                     // 루틴마다 요일이 달라서, 하나라도 예정인 날을 "예정"으로 본다.
-                    trainingDays = viewModel.anyTrainingDays(),
+                    trainingDays = viewModel.anyTrainingDays(data),
                     onMonthChange = { month = it; selectedDay = null },
                     selected = selectedDay,
                     onSelectDay = { selectedDay = if (selectedDay == it) null else it }
@@ -199,7 +199,7 @@ fun HistoryScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
 
         item {
             SectionCard(title = "최근 14세션") {
-                val goalTotal = viewModel.plan?.goalTotal
+                val goalTotal = viewModel.primaryRoutine(data)?.goalTotal
                 RepsBarChart(
                     entries = chartLogs.map { BarEntry(it.total, DateUtils.short(it.date)) },
                     goal = goalTotal

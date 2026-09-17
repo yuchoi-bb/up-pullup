@@ -46,6 +46,28 @@ done | sort -u
 kotlin stdlib(`List`, `String`, `IllegalStateException`, `OptIn`…)과 확장 멤버만
 남아야 한다. 그 밖의 이름이 나오면 진짜로 빠진 것이다.
 
+## Compose 상태를 안 읽어서 화면이 안 바뀌는 버그
+
+이 저장소에서 같은 버그를 세 번 냈다(+/- 가 안 먹음, 루틴 추가해도 목록 그대로).
+
+원인은 늘 같다. `viewModel.something()` 안에서 `stateFlow.value`를 읽으면
+**Compose는 그 화면이 상태를 읽었다고 기록하지 않는다.** 값은 바뀌는데 화면을
+다시 그리지 않아서 "버튼이 안 먹는다"로 보인다. 컴파일도 테스트도 다 통과한다.
+
+그래서 데이터에 기대는 조회 함수는 **AppData를 인자로 받는다.** 호출하는 쪽이
+`collectAsState()`로 받은 값을 넘길 수밖에 없어서 실수가 안 난다.
+새 조회 함수를 만들 때도 이 규칙을 지킬 것 — 안에서 `data.value`를 읽지 않는다.
+
+화면을 고쳤으면 확인:
+
+```bash
+for f in TodayScreen HistoryScreen PlanScreen SettingsScreen CoachScreen; do
+  grep -q "viewModel.data.collectAsState" app/src/main/java/com/pullup/tracker/ui/screens/$f.kt \
+    && grep -qE "viewModel\.[a-zA-Z]+\(data" app/src/main/java/com/pullup/tracker/ui/screens/$f.kt \
+    && echo "$f OK" || echo "$f 확인 필요"
+done
+```
+
 ## 사용자
 
 한국어로 답한다. 모바일에서 짧게 쓴다. 모호하면 넘겨짚지 말고 물어본다.

@@ -38,8 +38,8 @@ import com.pullup.tracker.ui.components.StatTile
 @Composable
 fun PlanScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val data by viewModel.data.collectAsState()
-    val plan = viewModel.plan
-    val position = viewModel.sessionPosition()
+    val plan = viewModel.primaryRoutine(data)
+    val position = viewModel.sessionPosition(data)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -62,7 +62,7 @@ fun PlanScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
 
         item {
             val remaining = (plan.sessions.size - position).coerceAtLeast(0)
-            val finishDate = viewModel.projectedDate(plan.sessions.size)
+            val finishDate = viewModel.projectedDate(data, plan.sessions.size)
             SectionCard(title = plan.name) {
                 Text(plan.goal, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(14.dp))
@@ -111,7 +111,7 @@ fun PlanScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                     index == position -> SessionState.CURRENT
                     else -> SessionState.UPCOMING
                 },
-                dateLabel = DateUtils.short(viewModel.projectedDate(session.index).toString())
+                dateLabel = DateUtils.short(viewModel.projectedDate(data, session.index).toString())
             )
         }
 

@@ -46,8 +46,9 @@ import com.pullup.tracker.ui.components.SectionCard
 fun CoachScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val settings by viewModel.settings.collectAsState()
     val coach by viewModel.coach.collectAsState()
-    val currentSession = viewModel.currentSession()
-    val plan = viewModel.plan
+    val data by viewModel.data.collectAsState()
+    val currentSession = viewModel.currentSession(data)
+    val plan = viewModel.primaryRoutine(data)
 
     var exercise by remember { mutableStateOf(plan?.exercise ?: "풀업") }
     var currentReps by remember {

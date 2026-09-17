@@ -290,7 +290,7 @@ fun SettingsScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
 
         // ------------------------------------------------------- 루틴 관리
         item {
-            val routines = viewModel.routines()
+            val routines = viewModel.routines(data)
             SectionCard(
                 title = "루틴 관리",
                 trailing = {

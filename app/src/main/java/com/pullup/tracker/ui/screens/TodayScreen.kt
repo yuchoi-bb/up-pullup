@@ -78,8 +78,8 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
     val rest by viewModel.restRemaining.collectAsState()
     val restRoutineId by viewModel.restRoutineId.collectAsState()
 
-    val plan = viewModel.plan
-    val stats = viewModel.stats()
+    val plan = viewModel.primaryRoutine(data)
+    val stats = viewModel.stats(data)
     // 가장 최근 세션. 오늘 것을 빼지 않는다 — 방금 기록했는데 카드에 어제가
     // 남아 있으면 반영이 안 된 것처럼 보인다.
     val latest = data.logs.maxByOrNull { it.recordedAt }
@@ -137,7 +137,7 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             }
         }
 
-        val routines = viewModel.routines()
+        val routines = viewModel.routines(data)
 
         if (routines.isEmpty()) {
             item {
@@ -154,20 +154,20 @@ fun TodayScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             if (routine.isCheck) {
                 CheckRoutineCard(
                     routine = routine,
-                    done = viewModel.didToday(routine),
+                    done = viewModel.didToday(data, routine),
                     onToggle = { viewModel.toggleCheckRoutine(routine) }
                 )
             } else {
-                val session = viewModel.sessionOf(routine)
+                val session = viewModel.sessionOf(data, routine)
                 CountedRoutineCard(
                     routine = routine,
                     session = session,
-                    position = viewModel.positionOf(routine),
+                    position = viewModel.positionOf(data, routine),
                     reps = repsByRoutine[routine.id] ?: session?.targets.orEmpty(),
                     setDone = setDoneByRoutine[routine.id]
                         ?: List(session?.targets?.size ?: 0) { false },
-                    doneToday = viewModel.didToday(routine),
-                    retry = viewModel.retryStateOf(routine),
+                    doneToday = viewModel.didToday(data, routine),
+                    retry = viewModel.retryStateOf(data, routine),
                     busy = busy,
                     restSeconds = if (restRoutineId == routine.id) rest else 0,
                     restTotal = settings.restSeconds,

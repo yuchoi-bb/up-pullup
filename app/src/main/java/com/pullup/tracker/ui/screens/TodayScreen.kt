@@ -435,10 +435,22 @@ private fun CountedRoutineCard(
     onClear: () -> Unit,
     onRecord: () -> Unit
 ) {
-    if (session == null) {
-        SectionCard(title = routine.name) {
-            Text("완주했습니다 🎉", style = MaterialTheme.typography.bodyMedium)
-        }
+    // currentSession은 끝까지 가도 null이 아니라 마지막 세션을 그대로 돌려준다.
+    // 그래서 완주 여부는 진행 위치로 봐야 한다. 예전에는 "세션 2 / 1"처럼 범위를
+    // 넘겨 찍히고 기록 버튼도 그대로 남아 있었다.
+    val total = routine.sessions.size
+    val finished = session == null || position >= total
+
+    if (finished) {
+        CompletedRoutineCard(
+            routine = routine,
+            session = session,
+            doneToday = doneToday,
+            reps = reps,
+            busy = busy,
+            onReps = onReps,
+            onRecord = onRecord
+        )
         return
     }
 
@@ -451,7 +463,7 @@ private fun CountedRoutineCard(
         title = routine.name,
         trailing = {
             Text(
-                "세션 ${position + 1} / ${routine.sessions.size}",
+                "세션 ${position + 1} / $total",
                 style = MaterialTheme.typography.labelMedium
             )
         }
@@ -644,6 +656,87 @@ private fun RestBlock(remaining: Int, total: Int, onSkip: () -> Unit, onRestart:
                 progress = { if (total <= 0) 0f else remaining.toFloat() / total },
                 modifier = Modifier.fillMaxWidth()
             )
+        }
+    }
+}
+
+/**
+ * 목표까지 다 올라간 루틴.
+ *
+ * 여기서 끝내지 않는다 — 스트레칭처럼 매일 같은 양을 계속하는 것도 있다.
+ * 마지막 목표 그대로 계속 기록할 수 있게 둔다.
+ */
+@Composable
+private fun CompletedRoutineCard(
+    routine: TrainingPlan,
+    session: PlanSession?,
+    doneToday: Boolean,
+    reps: List<Int>,
+    busy: Boolean,
+    onReps: (Int, Int) -> Unit,
+    onRecord: () -> Unit
+) {
+    var expanded by remember(routine.id) { mutableStateOf(false) }
+
+    SectionCard(
+        title = routine.name,
+        trailing = {
+            Text("완주 🎉", style = MaterialTheme.typography.labelMedium)
+        }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "목표 ${routine.goalTotal}개에 도달했습니다.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    "같은 목표로 계속해도 됩니다. 그만두려면 설정 → 루틴 관리에서 빼세요.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (doneToday) {
+                Pill(
+                    "오늘 완료",
+                    icon = Icons.Default.CheckCircle,
+                    container = MaterialTheme.colorScheme.secondaryContainer,
+                    content = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+
+        if (session == null) return@SectionCard
+
+        Spacer(Modifier.height(10.dp))
+        TextButton(onClick = { expanded = !expanded }) {
+            Text(if (expanded) "접기" else "같은 목표로 계속하기")
+        }
+
+        if (!expanded) return@SectionCard
+
+        Spacer(Modifier.height(4.dp))
+        session.targets.forEachIndexed { index, target ->
+            SetRow(
+                index = index,
+                target = target,
+                value = reps.getOrElse(index) { target },
+                done = false,
+                onValue = { onReps(index, it) },
+                onToggle = {}
+            )
+            if (index != session.targets.lastIndex) Spacer(Modifier.height(8.dp))
+        }
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = onRecord,
+            enabled = !busy,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text("총 ${reps.sum()}개 기록하기", style = MaterialTheme.typography.titleMedium)
         }
     }
 }

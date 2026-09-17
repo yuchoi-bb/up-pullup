@@ -740,8 +740,14 @@ private fun TaskListPicker(
         }
         Spacer(Modifier.height(6.dp))
         if (options.isEmpty()) {
+            // 고른 목록은 설정에 남아 있고, 가져온 목록만 앱을 다시 켜면 비어 있다.
+            // 그런데 "불러오기를 누르세요"만 떠서 연동이 안 된 것처럼 보였다.
             Text(
-                "'불러오기'를 눌러 Google 할 일 목록을 가져오세요.",
+                if (selected.isBlank()) {
+                    "'불러오기'를 눌러 Google 할 일 목록을 가져오세요."
+                } else {
+                    "'$selected'을(를) 쓰고 있습니다. 다른 목록으로 바꾸려면 '불러오기'를 누르세요."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
